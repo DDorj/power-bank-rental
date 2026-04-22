@@ -1,0 +1,58 @@
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { WalletService } from './wallet.service.js';
+import { TopupDto } from './dto/topup.dto.js';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import { TrustTierGuard } from '../../common/guards/trust-tier.guard.js';
+import { RequireTier } from '../../common/decorators/require-tier.decorator.js';
+import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
+import type { AuthUser } from '../../common/decorators/current-user.decorator.js';
+
+@UseGuards(JwtAuthGuard)
+@Controller('wallet')
+export class WalletController {
+  constructor(private readonly service: WalletService) {}
+
+  @Get()
+  getWallet(@CurrentUser() user: AuthUser) {
+    return this.service.getOrCreate(user.id);
+  }
+
+  @Get('transactions')
+  getTransactions(
+    @CurrentUser() user: AuthUser,
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+  ) {
+    const p = Math.max(1, parseInt(page, 10) || 1);
+    const l = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
+    return this.service.getTransactions(user.id, p, l);
+  }
+
+  // Dev/test endpoint — real topup will go through Bonum QR flow
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(TrustTierGuard)
+  @RequireTier(1)
+  @Post('topup/direct')
+  @HttpCode(HttpStatus.OK)
+  directTopup(@CurrentUser() user: AuthUser, @Body() dto: TopupDto) {
+    if (process.env['NODE_ENV'] === 'production') {
+      return { success: false, code: 'NOT_FOUND', message: 'Not found' };
+    }
+    return this.service.applyTransaction({
+      userId: user.id,
+      type: 'topup',
+      amount: dto.amount,
+      description: 'Шууд цэнэглэлт (dev)',
+    });
+  }
+}

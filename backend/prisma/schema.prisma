@@ -1,0 +1,290 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [postgis, pgcrypto]
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum AuthProvider {
+  google
+  phone_otp
+  email_password
+  dan
+}
+
+enum KycStatus {
+  none
+  pending
+  verified
+  rejected
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum StationStatus {
+  active
+  inactive
+  maintenance
+}
+
+enum SlotStatus {
+  empty
+  occupied
+  faulty
+}
+
+enum PowerBankStatus {
+  idle
+  rented
+  charging
+  faulty
+}
+
+enum WalletTransactionType {
+  topup
+  freeze
+  unfreeze
+  charge
+  refund
+  adjustment
+}
+
+enum RentalStatus {
+  active
+  completed
+  overdue
+  cancelled
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  email String? @unique @db.VarChar(254)
+  phone String? @unique @db.VarChar(20)
+  name  String  @db.VarChar(120)
+
+  primaryAuthMethod AuthProvider @map("primary_auth_method")
+  role              UserRole     @default(user)
+  trustTier         Int          @default(1) @map("trust_tier") @db.SmallInt
+  kycStatus         KycStatus    @default(none) @map("kyc_status")
+  kycVerifiedAt     DateTime?    @map("kyc_verified_at") @db.Timestamptz
+
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  identities      AuthIdentity[]
+  danVerification DanVerification?
+  refreshTokens   RefreshToken[]
+  wallet          Wallet?
+  rentals         Rental[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model AuthIdentity {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  userId         String       @map("user_id") @db.Uuid
+  provider       AuthProvider
+  providerUserId String       @map("provider_user_id") @db.VarChar(512)
+
+  verifiedAt DateTime? @map("verified_at") @db.Timestamptz
+  metadata   Json?     @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@map("auth_identities")
+}
+
+model DanVerification {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  userId String @unique @map("user_id") @db.Uuid
+
+  nationalIdHash String  @map("national_id_hash") @db.VarChar(64)
+  givenName      String  @map("given_name") @db.VarChar(512)  // AES-256 encrypted
+  familyName     String  @map("family_name") @db.VarChar(512) // AES-256 encrypted
+  birthdate      String? @db.VarChar(10)                      // yyyy-MM-dd, encrypted
+  gender         String? @db.VarChar(128)                     // encrypted
+
+  danSessionId String?   @map("dan_session_id") @db.VarChar(256)
+  verifiedAt   DateTime  @map("verified_at") @db.Timestamptz
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("dan_verifications")
+}
+
+// ─── Station domain ───────────────────────────────────────────────────────────
+
+model Station {
+  id   String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name String @db.VarChar(200)
+
+  address  String                                  @db.VarChar(500)
+  location Unsupported("geometry(Point, 4326)")
+
+  status    StationStatus @default(active)
+  totalSlots Int          @map("total_slots") @db.SmallInt
+
+  mqttDeviceId    String?   @unique @map("mqtt_device_id") @db.VarChar(100)
+  lastHeartbeatAt DateTime? @map("last_heartbeat_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  slots           Slot[]
+  powerBanks      PowerBank[]
+  startedRentals  Rental[] @relation("rental_start_station")
+  endedRentals    Rental[] @relation("rental_end_station")
+
+  @@index([status])
+  @@map("stations")
+}
+
+model Slot {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stationId String     @map("station_id") @db.Uuid
+  slotIndex Int        @map("slot_index") @db.SmallInt
+  status    SlotStatus @default(empty)
+
+  powerBankId String? @unique @map("power_bank_id") @db.Uuid
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  station   Station    @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  powerBank PowerBank? @relation(fields: [powerBankId], references: [id])
+
+  @@unique([stationId, slotIndex])
+  @@map("slots")
+}
+
+model PowerBank {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  serialNumber String          @unique @map("serial_number") @db.VarChar(100)
+  status       PowerBankStatus @default(idle)
+  chargeLevel  Int             @default(0) @map("charge_level") @db.SmallInt
+
+  stationId String? @map("station_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  station Station? @relation(fields: [stationId], references: [id])
+  slot    Slot?
+  rentals Rental[]
+
+  @@index([stationId])
+  @@index([status])
+  @@map("power_banks")
+}
+
+// ─── Wallet domain ────────────────────────────────────────────────────────────
+
+model Wallet {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @unique @map("user_id") @db.Uuid
+  balance      Int      @default(0)
+  frozenAmount Int      @default(0) @map("frozen_amount")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  walletId     String                @map("wallet_id") @db.Uuid
+  type         WalletTransactionType
+  amount       Int
+  balanceAfter Int                   @map("balance_after")
+  frozenAfter  Int                   @map("frozen_after")
+  referenceId  String?               @map("reference_id") @db.VarChar(100)
+  description  String?               @db.VarChar(255)
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId])
+  @@index([referenceId])
+  @@map("wallet_transactions")
+}
+
+// ─── Rental domain ────────────────────────────────────────────────────────────
+
+model PricingRule {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ratePerHour   Int      @map("rate_per_hour")
+  dailyMax      Int      @map("daily_max")
+  depositAmount Int      @map("deposit_amount")
+  isDefault     Boolean  @default(false) @map("is_default")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("pricing_rules")
+}
+
+model Rental {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  powerBankId    String       @map("power_bank_id") @db.Uuid
+  startStationId String       @map("start_station_id") @db.Uuid
+  startSlotId    String       @map("start_slot_id") @db.Uuid
+  endStationId   String?      @map("end_station_id") @db.Uuid
+  endSlotId      String?      @map("end_slot_id") @db.Uuid
+
+  status        RentalStatus @default(active)
+  depositAmount Int          @map("deposit_amount")
+  chargeAmount  Int?         @map("charge_amount")
+
+  startedAt  DateTime  @default(now()) @map("started_at") @db.Timestamptz
+  returnedAt DateTime? @map("returned_at") @db.Timestamptz
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user         User      @relation(fields: [userId], references: [id])
+  powerBank    PowerBank @relation(fields: [powerBankId], references: [id])
+  startStation Station   @relation("rental_start_station", fields: [startStationId], references: [id])
+  endStation   Station?  @relation("rental_end_station", fields: [endStationId], references: [id])
+
+  @@index([userId, status])
+  @@index([powerBankId])
+  @@index([status])
+  @@map("rentals")
+}

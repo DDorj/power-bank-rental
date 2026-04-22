@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: pbr-postgres
+    restart: unless-stopped
+    ports:
+      - '5433:5432'
+    environment:
+      POSTGRES_USER: pbr
+      POSTGRES_PASSWORD: pbr_dev
+      POSTGRES_DB: pbr
+    volumes:
+      - pbr-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pbr -d pbr']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: pbr-redis
+    restart: unless-stopped
+    ports:
+      - '6380:6379'
+    volumes:
+      - pbr-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  emqx:
+    image: emqx/emqx:5.8.3
+    container_name: pbr-emqx
+    restart: unless-stopped
+    ports:
+      - '1883:1883' # MQTT
+      - '8083:8083' # MQTT over WebSocket
+      - '18083:18083' # Dashboard
+    volumes:
+      - pbr-emqx-data:/opt/emqx/data
+      - pbr-emqx-log:/opt/emqx/log
+    healthcheck:
+      test: ['CMD', 'emqx', 'ctl', 'status']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  pbr-postgres-data:
+  pbr-redis-data:
+  pbr-emqx-data:
+  pbr-emqx-log:
