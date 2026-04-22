@@ -10,18 +10,37 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiParam,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
+import { ApiSuccessResponse } from '../../common/swagger/api-success-response.decorator.js';
 import { RentalsService } from './rentals.service.js';
+import {
+  RentalHistoryResponseDto,
+  RentalResponseDto,
+} from './dto/rental-response.dto.js';
 import { StartRentalDto } from './dto/start-rental.dto.js';
 import { ReturnRentalDto } from './dto/return-rental.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthUser } from '../../common/decorators/current-user.decorator.js';
 
+@ApiTags('Rentals')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('rentals')
 export class RentalsController {
   constructor(private readonly service: RentalsService) {}
 
+  @ApiBody({ type: StartRentalDto })
+  @ApiSuccessResponse({
+    status: HttpStatus.CREATED,
+    type: RentalResponseDto,
+  })
   @Post('start')
   @HttpCode(HttpStatus.CREATED)
   start(@CurrentUser() user: AuthUser, @Body() dto: StartRentalDto) {
@@ -32,6 +51,12 @@ export class RentalsController {
     });
   }
 
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiBody({ type: ReturnRentalDto })
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: RentalResponseDto,
+  })
   @Post(':id/return')
   @HttpCode(HttpStatus.OK)
   returnRental(
@@ -47,11 +72,22 @@ export class RentalsController {
     });
   }
 
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: RentalResponseDto,
+    nullable: true,
+  })
   @Get('active')
   getActive(@CurrentUser() user: AuthUser) {
     return this.service.getActive(user.id);
   }
 
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: RentalHistoryResponseDto,
+  })
   @Get('history')
   getHistory(
     @CurrentUser() user: AuthUser,

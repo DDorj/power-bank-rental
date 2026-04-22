@@ -7,7 +7,6 @@ jest.mock('../../../common/prisma/prisma.service', () => ({
 
 import { RentalsService } from '../rentals.service.js';
 import { RentalsRepository } from '../rentals.repository.js';
-import { PrismaService } from '../../../common/prisma/prisma.service.js';
 import { RedisService } from '../../../common/redis/redis.service.js';
 import { WalletService } from '../../wallet/wallet.service.js';
 import {
@@ -68,7 +67,6 @@ const mockSlotWithPowerBank = {
 describe('RentalsService', () => {
   let service: RentalsService;
   let repo: jest.Mocked<RentalsRepository>;
-  let prisma: jest.Mocked<PrismaService>;
   let redis: jest.Mocked<RedisService>;
   let walletService: jest.Mocked<WalletService>;
 
@@ -89,13 +87,8 @@ describe('RentalsService', () => {
             createRental: jest.fn(),
             completeRental: jest.fn(),
             $transaction: jest.fn(),
-          },
-        },
-        {
-          provide: PrismaService,
-          useValue: {
-            slot: { findUnique: jest.fn(), update: jest.fn() },
-            powerBank: { update: jest.fn() },
+            findSlotWithPowerBankInTx: jest.fn(),
+            findSlotById: jest.fn(),
           },
         },
         {
@@ -111,7 +104,6 @@ describe('RentalsService', () => {
 
     service = module.get(RentalsService);
     repo = module.get(RentalsRepository);
-    prisma = module.get(PrismaService);
     redis = module.get(RedisService);
     walletService = module.get(WalletService);
 
@@ -120,7 +112,12 @@ describe('RentalsService', () => {
   });
 
   const makeMockTx = () => ({
-    powerBank: { update: jest.fn().mockResolvedValue({}) },
+    powerBank: {
+      update: jest.fn().mockResolvedValue({}),
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ id: 'pb-uuid-1', status: 'rented' }),
+    },
     slot: { update: jest.fn().mockResolvedValue({}) },
     wallet: {
       findUnique: jest
@@ -134,10 +131,8 @@ describe('RentalsService', () => {
   describe('start', () => {
     it('creates rental on valid slot with idle power bank', async () => {
       repo.findActiveByUser.mockResolvedValue(null);
-      (prisma.slot.findUnique as jest.Mock).mockResolvedValue(
-        mockSlotWithPowerBank,
-      );
       repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      repo.findSlotWithPowerBankInTx.mockResolvedValue(mockSlotWithPowerBank);
       const mockTx = makeMockTx();
       repo.$transaction.mockImplementation(async (fn) => fn(mockTx as never));
       walletService.applyInExistingTx.mockResolvedValue({} as never);
@@ -162,9 +157,24 @@ describe('RentalsService', () => {
       ).rejects.toThrow(ActiveRentalExistsException);
     });
 
+    it('throws NoPricingRuleException when no pricing configured', async () => {
+      repo.findActiveByUser.mockResolvedValue(null);
+      repo.getDefaultPricing.mockResolvedValue(null);
+
+      await expect(
+        service.start({
+          userId: 'user-uuid-1',
+          stationId: 'station-uuid-1',
+          slotId: 'slot-uuid-1',
+        }),
+      ).rejects.toThrow(NoPricingRuleException);
+    });
+
     it('throws SlotNotFoundException when slot not found', async () => {
       repo.findActiveByUser.mockResolvedValue(null);
-      (prisma.slot.findUnique as jest.Mock).mockResolvedValue(null);
+      repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      repo.findSlotWithPowerBankInTx.mockResolvedValue(null);
+      repo.$transaction.mockImplementation(async (fn) => fn({} as never));
 
       await expect(
         service.start({ userId: 'user-uuid-1', stationId: 'st', slotId: 'sl' }),
@@ -173,10 +183,12 @@ describe('RentalsService', () => {
 
     it('throws SlotNotFoundException when slot belongs to different station', async () => {
       repo.findActiveByUser.mockResolvedValue(null);
-      (prisma.slot.findUnique as jest.Mock).mockResolvedValue({
+      repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      repo.findSlotWithPowerBankInTx.mockResolvedValue({
         ...mockSlotWithPowerBank,
         stationId: 'other-station',
       });
+      repo.$transaction.mockImplementation(async (fn) => fn({} as never));
 
       await expect(
         service.start({
@@ -189,10 +201,12 @@ describe('RentalsService', () => {
 
     it('throws SlotEmptyException when slot has no power bank', async () => {
       repo.findActiveByUser.mockResolvedValue(null);
-      (prisma.slot.findUnique as jest.Mock).mockResolvedValue({
+      repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      repo.findSlotWithPowerBankInTx.mockResolvedValue({
         ...mockSlotWithPowerBank,
         powerBank: null,
       });
+      repo.$transaction.mockImplementation(async (fn) => fn({} as never));
 
       await expect(
         service.start({
@@ -205,10 +219,12 @@ describe('RentalsService', () => {
 
     it('throws PowerBankNotIdleException when power bank is rented', async () => {
       repo.findActiveByUser.mockResolvedValue(null);
-      (prisma.slot.findUnique as jest.Mock).mockResolvedValue({
+      repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      repo.findSlotWithPowerBankInTx.mockResolvedValue({
         ...mockSlotWithPowerBank,
         powerBank: { ...mockSlotWithPowerBank.powerBank, status: 'rented' },
       });
+      repo.$transaction.mockImplementation(async (fn) => fn({} as never));
 
       await expect(
         service.start({
@@ -219,25 +235,11 @@ describe('RentalsService', () => {
       ).rejects.toThrow(PowerBankNotIdleException);
     });
 
-    it('throws NoPricingRuleException when no pricing configured', async () => {
-      repo.findActiveByUser.mockResolvedValue(null);
-      (prisma.slot.findUnique as jest.Mock).mockResolvedValue(
-        mockSlotWithPowerBank,
-      );
-      repo.getDefaultPricing.mockResolvedValue(null);
-
-      await expect(
-        service.start({
-          userId: 'user-uuid-1',
-          stationId: 'station-uuid-1',
-          slotId: 'slot-uuid-1',
-        }),
-      ).rejects.toThrow(NoPricingRuleException);
-    });
-
     it('releases lock on error', async () => {
       repo.findActiveByUser.mockResolvedValue(null);
-      (prisma.slot.findUnique as jest.Mock).mockResolvedValue(null);
+      repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      repo.findSlotWithPowerBankInTx.mockResolvedValue(null);
+      repo.$transaction.mockImplementation(async (fn) => fn({} as never));
 
       await expect(
         service.start({ userId: 'user-uuid-1', stationId: 'st', slotId: 'sl' }),
@@ -261,7 +263,7 @@ describe('RentalsService', () => {
 
     it('completes rental and charges correct amount', async () => {
       repo.findByIdAndUser.mockResolvedValue(mockRental);
-      (prisma.slot.findUnique as jest.Mock).mockResolvedValue(mockEmptySlot);
+      repo.findSlotById.mockResolvedValue(mockEmptySlot);
       repo.getDefaultPricing.mockResolvedValue(mockPricing);
       const mockTx = makeMockTx();
       repo.$transaction.mockImplementation(async (fn) => fn(mockTx as never));
@@ -316,7 +318,7 @@ describe('RentalsService', () => {
 
     it('throws SlotOccupiedException when return slot is occupied', async () => {
       repo.findByIdAndUser.mockResolvedValue(mockRental);
-      (prisma.slot.findUnique as jest.Mock).mockResolvedValue({
+      repo.findSlotById.mockResolvedValue({
         ...mockEmptySlot,
         status: 'occupied',
       });

@@ -6,29 +6,17 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { RedisService } from '../../common/redis/redis.service.js';
+import { ApiSuccessResponse } from '../../common/swagger/api-success-response.decorator.js';
+import {
+  HealthComponentStatusDto,
+  HealthLivenessResponseDto,
+  HealthReadinessResponseDto,
+} from './dto/health-response.dto.js';
 
-interface LivenessResponse {
-  status: 'ok';
-  uptime: number;
-  timestamp: string;
-}
-
-interface ComponentStatus {
-  status: 'ok' | 'error';
-  latencyMs?: number;
-  error?: string;
-}
-
-interface ReadinessResponse {
-  status: 'ok' | 'degraded';
-  components: {
-    database: ComponentStatus;
-    redis: ComponentStatus;
-  };
-}
-
+@ApiTags('Health')
 @Controller('health')
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
@@ -38,8 +26,9 @@ export class HealthController {
     private readonly redis: RedisService,
   ) {}
 
+  @ApiSuccessResponse({ type: HealthLivenessResponseDto })
   @Get()
-  liveness(): LivenessResponse {
+  liveness(): HealthLivenessResponseDto {
     return {
       status: 'ok',
       uptime: process.uptime(),
@@ -47,9 +36,10 @@ export class HealthController {
     };
   }
 
+  @ApiSuccessResponse({ type: HealthReadinessResponseDto })
   @Get('ready')
   @HttpCode(HttpStatus.OK)
-  async readiness(): Promise<ReadinessResponse> {
+  async readiness(): Promise<HealthReadinessResponseDto> {
     const [database, redis] = await Promise.all([
       this.checkDatabase(),
       this.checkRedis(),
@@ -67,7 +57,7 @@ export class HealthController {
     return { status: 'ok', components: { database, redis } };
   }
 
-  private async checkDatabase(): Promise<ComponentStatus> {
+  private async checkDatabase(): Promise<HealthComponentStatusDto> {
     const start = Date.now();
     try {
       await this.prisma.$queryRaw`SELECT 1`;
@@ -82,7 +72,7 @@ export class HealthController {
     }
   }
 
-  private async checkRedis(): Promise<ComponentStatus> {
+  private async checkRedis(): Promise<HealthComponentStatusDto> {
     const start = Date.now();
     try {
       await this.redis.ping();

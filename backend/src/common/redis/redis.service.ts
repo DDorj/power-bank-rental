@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import type { EnvConfig } from '../../config/env.schema.js';
 
 @Injectable()

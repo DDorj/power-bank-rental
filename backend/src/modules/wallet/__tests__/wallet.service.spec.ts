@@ -52,6 +52,7 @@ describe('WalletService', () => {
             countTransactions: jest.fn(),
             applyInTx: jest.fn(),
             lockWallet: jest.fn(),
+            lockWalletByUserId: jest.fn(),
             $transaction: jest.fn(),
           },
         },
@@ -89,19 +90,11 @@ describe('WalletService', () => {
     beforeEach(() => {
       redis.acquireLock.mockResolvedValue(mockRelease);
       repo.$transaction.mockImplementation(async (fn) => fn({} as never));
-      repo.lockWallet.mockResolvedValue(mockWallet);
+      repo.lockWalletByUserId.mockResolvedValue(mockWallet);
       repo.applyInTx.mockResolvedValue(mockTxRecord);
     });
 
-    it('topup: increases balance', async () => {
-      repo.$transaction.mockImplementation(async (fn) => {
-        // Simulate finding wallet inside tx
-        return fn({
-          wallet: { findUnique: jest.fn().mockResolvedValue(mockWallet) },
-        } as never);
-      });
-
-      // Just verify lock is acquired and released
+    it('topup: acquires lock and releases it', async () => {
       redis.acquireLock.mockResolvedValue(mockRelease);
       repo.$transaction.mockResolvedValue(mockTxRecord);
 
@@ -138,39 +131,33 @@ describe('WalletService', () => {
   describe('calculateNewState (via applyInExistingTx)', () => {
     it('topup: balance increases', async () => {
       repo.applyInTx.mockResolvedValue(mockTxRecord);
-      const mockTx = {
-        wallet: { findUnique: jest.fn().mockResolvedValue(mockWallet) },
-      };
-      repo.lockWallet.mockResolvedValue({
+      repo.lockWalletByUserId.mockResolvedValue({
         ...mockWallet,
         balance: 5000,
         frozenAmount: 0,
       });
 
-      await service.applyInExistingTx(mockTx as never, {
+      await service.applyInExistingTx({} as never, {
         userId: 'user-uuid-1',
         type: 'topup',
         amount: 3000,
       });
 
       expect(repo.applyInTx).toHaveBeenCalledWith(
-        mockTx,
+        {},
         expect.objectContaining({ newBalance: 8000, newFrozen: 0 }),
       );
     });
 
     it('freeze: throws InsufficientBalanceException when amount > available', async () => {
-      repo.lockWallet.mockResolvedValue({
+      repo.lockWalletByUserId.mockResolvedValue({
         ...mockWallet,
         balance: 1000,
         frozenAmount: 0,
       });
-      const mockTx = {
-        wallet: { findUnique: jest.fn().mockResolvedValue(mockWallet) },
-      };
 
       await expect(
-        service.applyInExistingTx(mockTx as never, {
+        service.applyInExistingTx({} as never, {
           userId: 'user-uuid-1',
           type: 'freeze',
           amount: 5000,
@@ -179,66 +166,78 @@ describe('WalletService', () => {
     });
 
     it('freeze: succeeds when amount <= available', async () => {
-      repo.lockWallet.mockResolvedValue({
+      repo.lockWalletByUserId.mockResolvedValue({
         ...mockWallet,
         balance: 10000,
         frozenAmount: 2000,
       });
       repo.applyInTx.mockResolvedValue(mockTxRecord);
-      const mockTx = {
-        wallet: { findUnique: jest.fn().mockResolvedValue(mockWallet) },
-      };
 
-      await service.applyInExistingTx(mockTx as never, {
+      await service.applyInExistingTx({} as never, {
         userId: 'user-uuid-1',
         type: 'freeze',
         amount: 3000,
       });
 
       expect(repo.applyInTx).toHaveBeenCalledWith(
-        mockTx,
+        {},
         expect.objectContaining({ newBalance: 10000, newFrozen: 5000 }),
       );
     });
 
-    it('charge: throws InsufficientBalanceException when balance < amount', async () => {
-      repo.lockWallet.mockResolvedValue({
+    it('charge: throws InsufficientBalanceException when available balance < amount', async () => {
+      // H-3: charge checks balance - frozenAmount, not balance alone
+      repo.lockWalletByUserId.mockResolvedValue({
         ...mockWallet,
         balance: 500,
-        frozenAmount: 0,
+        frozenAmount: 300,
       });
-      const mockTx = {
-        wallet: { findUnique: jest.fn().mockResolvedValue(mockWallet) },
-      };
 
       await expect(
-        service.applyInExistingTx(mockTx as never, {
+        service.applyInExistingTx({} as never, {
           userId: 'user-uuid-1',
           type: 'charge',
-          amount: 1000,
+          amount: 300, // available = 500 - 300 = 200, charge 300 → fail
         }),
       ).rejects.toThrow(InsufficientBalanceException);
     });
 
+    it('charge: succeeds when available balance >= amount', async () => {
+      repo.lockWalletByUserId.mockResolvedValue({
+        ...mockWallet,
+        balance: 5000,
+        frozenAmount: 3000,
+      });
+      repo.applyInTx.mockResolvedValue(mockTxRecord);
+
+      await service.applyInExistingTx({} as never, {
+        userId: 'user-uuid-1',
+        type: 'charge',
+        amount: 1500, // available = 5000 - 3000 = 2000 >= 1500 → ok
+      });
+
+      expect(repo.applyInTx).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({ newBalance: 3500, newFrozen: 3000 }),
+      );
+    });
+
     it('unfreeze: frozen_amount decreases, never goes below 0', async () => {
-      repo.lockWallet.mockResolvedValue({
+      repo.lockWalletByUserId.mockResolvedValue({
         ...mockWallet,
         balance: 10000,
         frozenAmount: 3000,
       });
       repo.applyInTx.mockResolvedValue(mockTxRecord);
-      const mockTx = {
-        wallet: { findUnique: jest.fn().mockResolvedValue(mockWallet) },
-      };
 
-      await service.applyInExistingTx(mockTx as never, {
+      await service.applyInExistingTx({} as never, {
         userId: 'user-uuid-1',
         type: 'unfreeze',
         amount: 3000,
       });
 
       expect(repo.applyInTx).toHaveBeenCalledWith(
-        mockTx,
+        {},
         expect.objectContaining({ newBalance: 10000, newFrozen: 0 }),
       );
     });

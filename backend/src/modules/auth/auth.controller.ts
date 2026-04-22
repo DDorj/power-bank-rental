@@ -9,28 +9,46 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiFoundResponse,
+  ApiNoContentResponse,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
-import { ConfigService } from '@nestjs/config';
+import { ApiSuccessResponse } from '../../common/swagger/api-success-response.decorator.js';
 import { AuthService } from './auth.service.js';
+import {
+  AuthUrlResponseDto,
+  OtpRequestResponseDto,
+  OtpVerifyResponseDto,
+  TokenPairResponseDto,
+} from './dto/auth-response.dto.js';
 import { OtpRequestDto } from './dto/otp-request.dto.js';
 import { OtpVerifyDto } from './dto/otp-verify.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthUser } from '../../common/decorators/current-user.decorator.js';
-import type { EnvConfig } from '../../config/env.schema.js';
 
+const APP_SCHEME = 'powerbank://auth/callback';
+
+@ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
-  constructor(
-    private readonly authService: AuthService,
-    private readonly config: ConfigService<EnvConfig, true>,
-  ) {}
+  constructor(private readonly authService: AuthService) {}
 
   // ─── OTP ─────────────────────────────────────────────────────────────────
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiBody({ type: OtpRequestDto })
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: OtpRequestResponseDto,
+  })
   @Post('otp/request')
   @HttpCode(HttpStatus.OK)
   requestOtp(@Body() dto: OtpRequestDto) {
@@ -38,6 +56,11 @@ export class AuthController {
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiBody({ type: OtpVerifyDto })
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: OtpVerifyResponseDto,
+  })
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
   verifyOtp(@Body() dto: OtpVerifyDto) {
@@ -46,106 +69,74 @@ export class AuthController {
 
   // ─── Google OAuth ─────────────────────────────────────────────────────────
 
+  // C-2: CSRF state generated in service and stored in Redis
+  @ApiFoundResponse({
+    description: 'Google OAuth consent screen рүү redirect хийнэ.',
+  })
   @Get('google')
-  googleAuth(@Res() res: Response) {
-    const clientId = this.config.get('GOOGLE_CLIENT_ID', { infer: true });
-    const callbackUrl = this.config.get('GOOGLE_CALLBACK_URL', { infer: true });
-
-    if (!clientId || !callbackUrl) {
+  async googleAuth(@Res() res: Response) {
+    try {
+      const { authUrl } = await this.authService.initiateGoogleAuth();
+      return res.redirect(authUrl);
+    } catch {
       return res.status(HttpStatus.SERVICE_UNAVAILABLE).json({
         success: false,
         code: 'GOOGLE_NOT_CONFIGURED',
         message: 'Google интеграц тохируулагдаагүй байна',
       });
     }
-
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: clientId,
-      redirect_uri: callbackUrl,
-      scope: 'openid email profile',
-      access_type: 'offline',
-    });
-
-    return res.redirect(
-      `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
-    );
   }
 
+  @ApiFoundResponse({
+    description:
+      'Mobile app руу амжилттай эсвэл алдаатай callback redirect хийнэ.',
+  })
   @Get('google/callback')
   async googleCallback(
     @Query('code') code: string,
+    @Query('state') state: string,
     @Query('error') error: string,
     @Res() res: Response,
   ) {
-    if (error || !code) {
-      return res.redirect(this.buildAppRedirect('error', 'GOOGLE_AUTH_FAILED'));
+    if (error || !code || !state) {
+      return res.redirect(
+        `${APP_SCHEME}?status=error&error=GOOGLE_AUTH_FAILED`,
+      );
     }
 
     try {
-      const clientId = this.config.get('GOOGLE_CLIENT_ID', { infer: true })!;
-      const clientSecret = this.config.get('GOOGLE_CLIENT_SECRET', {
-        infer: true,
-      })!;
-      const callbackUrl = this.config.get('GOOGLE_CALLBACK_URL', {
-        infer: true,
-      })!;
-
-      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          code,
-          redirect_uri: callbackUrl,
-          client_id: clientId,
-          client_secret: clientSecret,
-        }),
-      });
-
-      const tokenData = (await tokenRes.json()) as { access_token: string };
-
-      const userRes = await fetch(
-        'https://www.googleapis.com/oauth2/v3/userinfo',
-        {
-          headers: { Authorization: `Bearer ${tokenData.access_token}` },
-        },
-      );
-      const userInfo = (await userRes.json()) as {
-        sub: string;
-        email: string;
-        name: string;
-        email_verified: boolean;
-      };
-
-      const result = await this.authService.googleLogin({
-        sub: userInfo.sub,
-        email: userInfo.email,
-        name: userInfo.name,
-        emailVerified: userInfo.email_verified,
-      });
-
+      // S-3: full token exchange delegated to service
+      const result = await this.authService.completeGoogleAuth(code, state);
+      // C-1: tokens stored in Redis; only short-lived code in URL
+      const { code: onetimeCode } =
+        await this.authService.issueOnetimeCode(result);
+      return res.redirect(`${APP_SCHEME}?status=success&code=${onetimeCode}`);
+    } catch (err) {
+      // H-1: log errors, don't swallow silently
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`Google callback error: ${msg}`);
       return res.redirect(
-        this.buildAppRedirect(
-          'success',
-          undefined,
-          result.accessToken,
-          result.refreshToken,
-        ),
+        `${APP_SCHEME}?status=error&error=GOOGLE_AUTH_FAILED`,
       );
-    } catch {
-      return res.redirect(this.buildAppRedirect('error', 'GOOGLE_AUTH_FAILED'));
     }
   }
 
   // ─── DAN OIDC ────────────────────────────────────────────────────────────
 
   @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: AuthUrlResponseDto,
+  })
   @Get('dan/initiate')
   initiateDan(@CurrentUser() user: AuthUser) {
     return this.authService.initiateDan(user.id);
   }
 
+  @ApiFoundResponse({
+    description: 'DAN баталгаажуулалтын дараа mobile app руу redirect хийнэ.',
+  })
   @Get('dan/callback')
   async danCallback(
     @Query('code') code: string,
@@ -154,20 +145,28 @@ export class AuthController {
     @Res() res: Response,
   ) {
     if (error || !code || !state) {
-      return res.redirect(this.buildAppRedirect('error', 'DAN_AUTH_FAILED'));
+      return res.redirect(`${APP_SCHEME}?status=error&error=DAN_AUTH_FAILED`);
     }
 
     try {
       await this.authService.completeDan(code, state);
-      return res.redirect(this.buildAppRedirect('dan_success'));
-    } catch {
-      return res.redirect(this.buildAppRedirect('error', 'DAN_AUTH_FAILED'));
+      return res.redirect(`${APP_SCHEME}?status=dan_success`);
+    } catch (err) {
+      // H-1: log errors, don't swallow silently
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`DAN callback error: ${msg}`);
+      return res.redirect(`${APP_SCHEME}?status=error&error=DAN_AUTH_FAILED`);
     }
   }
 
   // ─── Token management ─────────────────────────────────────────────────────
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiBody({ type: RefreshTokenDto })
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: TokenPairResponseDto,
+  })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   refresh(@Body() dto: RefreshTokenDto) {
@@ -175,24 +174,30 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiBody({ type: RefreshTokenDto })
+  @ApiNoContentResponse({
+    description: 'Refresh token амжилттай хүчингүй боллоо.',
+  })
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   async logout(@Body() dto: RefreshTokenDto) {
     await this.authService.logout(dto.refreshToken);
   }
 
-  // ─── Private ─────────────────────────────────────────────────────────────
-
-  private buildAppRedirect(
-    status: string,
-    error?: string,
-    accessToken?: string,
-    refreshToken?: string,
-  ): string {
-    const params = new URLSearchParams({ status });
-    if (error) params.set('error', error);
-    if (accessToken) params.set('access_token', accessToken);
-    if (refreshToken) params.set('refresh_token', refreshToken);
-    return `powerbank://auth/callback?${params.toString()}`;
+  // C-1: mobile app calls this after deep-link redirect to get actual tokens
+  @ApiQuery({
+    name: 'code',
+    type: String,
+    description: 'OAuth callback-аас авсан нэг удаагийн код',
+  })
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: TokenPairResponseDto,
+  })
+  @Post('exchange')
+  @HttpCode(HttpStatus.OK)
+  exchangeCode(@Query('code') code: string) {
+    return this.authService.exchangeOnetimeCode(code);
   }
 }

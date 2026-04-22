@@ -202,8 +202,7 @@ describe('AuthService', () => {
       expect(redis.set).toHaveBeenCalledWith(
         'otp:+97699001234',
         JSON.stringify({ code: '111111', attempts: 3 }),
-        'EX',
-        300,
+        'KEEPTTL',
       );
     });
 
