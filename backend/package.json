@@ -7,6 +7,8 @@
   "license": "UNLICENSED",
   "type": "module",
   "scripts": {
+    "prisma:generate": "./scripts/run-node.sh ./node_modules/prisma/build/index.js generate",
+    "prebuild": "npm run prisma:generate",
     "build": "./scripts/run-node.sh ./node_modules/@nestjs/cli/bin/nest.js build",
     "db:seed": "./scripts/run-node.sh prisma/seed.js",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
@@ -25,7 +27,8 @@
     "test:watch": "./scripts/run-node.sh --experimental-vm-modules ./node_modules/jest/bin/jest.js --watch",
     "test:cov": "./scripts/run-node.sh --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage",
     "test:debug": "./scripts/run-node.sh --experimental-vm-modules --inspect-brk ./node_modules/jest/bin/jest.js --runInBand",
-    "test:e2e": "./scripts/run-node.sh --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.config.cjs"
+    "test:e2e": "./scripts/run-node.sh --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.config.cjs",
+    "postinstall": "npm run prisma:generate"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
