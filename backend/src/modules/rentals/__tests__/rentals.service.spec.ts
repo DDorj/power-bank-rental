@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 
@@ -9,6 +10,7 @@ import { RentalsService } from '../rentals.service.js';
 import { RentalsRepository } from '../rentals.repository.js';
 import { RedisService } from '../../../common/redis/redis.service.js';
 import { WalletService } from '../../wallet/wallet.service.js';
+import { CabinetCommandService } from '../../iot/cabinet-command.service.js';
 import {
   ActiveRentalExistsException,
   NoPricingRuleException,
@@ -69,8 +71,16 @@ describe('RentalsService', () => {
   let repo: jest.Mocked<RentalsRepository>;
   let redis: jest.Mocked<RedisService>;
   let walletService: jest.Mocked<WalletService>;
+  let cabinetCommands: jest.Mocked<CabinetCommandService>;
 
   const mockRelease = jest.fn().mockResolvedValue(undefined);
+  const mockCabinetAck = {
+    commandId: 'command-uuid-1',
+    status: 'ok' as const,
+    errorCode: null,
+    errorMessage: null,
+    receivedAt: new Date(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -99,6 +109,15 @@ describe('RentalsService', () => {
           provide: WalletService,
           useValue: { applyInExistingTx: jest.fn() },
         },
+        {
+          provide: CabinetCommandService,
+          useValue: {
+            requireOnlineCabinet: jest.fn(),
+            releaseSlot: jest.fn(),
+            lockSlot: jest.fn(),
+            getHealthStatus: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -106,9 +125,13 @@ describe('RentalsService', () => {
     repo = module.get(RentalsRepository);
     redis = module.get(RedisService);
     walletService = module.get(WalletService);
+    cabinetCommands = module.get(CabinetCommandService);
 
     redis.acquireLock.mockResolvedValue(mockRelease);
     mockRelease.mockClear();
+    cabinetCommands.requireOnlineCabinet.mockResolvedValue('cabinet-uuid-1');
+    cabinetCommands.releaseSlot.mockResolvedValue(mockCabinetAck);
+    cabinetCommands.lockSlot.mockResolvedValue(mockCabinetAck);
   });
 
   const makeMockTx = () => ({
@@ -146,6 +169,13 @@ describe('RentalsService', () => {
 
       expect(result.status).toBe('active');
       expect(result.depositAmount).toBe(3000);
+      expect(cabinetCommands.requireOnlineCabinet).toHaveBeenCalledWith(
+        'station-uuid-1',
+      );
+      expect(cabinetCommands.releaseSlot).toHaveBeenCalledWith(
+        'cabinet-uuid-1',
+        { slotId: 'slot-uuid-1', slotIndex: 0 },
+      );
       expect(mockRelease).toHaveBeenCalled();
     });
 
@@ -247,6 +277,62 @@ describe('RentalsService', () => {
 
       expect(mockRelease).toHaveBeenCalled();
     });
+
+    it('propagates cabinet readiness errors before freezing wallet', async () => {
+      repo.findActiveByUser.mockResolvedValue(null);
+      repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      cabinetCommands.requireOnlineCabinet.mockRejectedValue(
+        new Error('cabinet offline'),
+      );
+
+      await expect(
+        service.start({
+          userId: 'user-uuid-1',
+          stationId: 'station-uuid-1',
+          slotId: 'slot-uuid-1',
+        }),
+      ).rejects.toThrow('cabinet offline');
+
+      expect(walletService.applyInExistingTx).not.toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalled();
+    });
+
+    it('unfreezes deposit when cabinet release command fails', async () => {
+      repo.findActiveByUser.mockResolvedValue(null);
+      repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      repo.findSlotWithPowerBankInTx.mockResolvedValue(mockSlotWithPowerBank);
+      repo.$transaction.mockImplementation(async (fn) => fn(makeMockTx() as never));
+      walletService.applyInExistingTx.mockResolvedValue({} as never);
+      cabinetCommands.releaseSlot.mockRejectedValue(new Error('ack timeout'));
+
+      await expect(
+        service.start({
+          userId: 'user-uuid-1',
+          stationId: 'station-uuid-1',
+          slotId: 'slot-uuid-1',
+        }),
+      ).rejects.toThrow('ack timeout');
+
+      expect(walletService.applyInExistingTx).toHaveBeenNthCalledWith(
+        1,
+        expect.anything(),
+        expect.objectContaining({
+          type: 'freeze',
+          amount: 3000,
+          referenceId: 'pb-uuid-1',
+        }),
+      );
+      expect(walletService.applyInExistingTx).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        expect.objectContaining({
+          type: 'unfreeze',
+          amount: 3000,
+          referenceId: 'pb-uuid-1',
+        }),
+      );
+      expect(repo.createRental).not.toHaveBeenCalled();
+    });
   });
 
   // ─── return ──────────────────────────────────────────────────────────────
@@ -262,14 +348,20 @@ describe('RentalsService', () => {
     };
 
     it('completes rental and charges correct amount', async () => {
-      repo.findByIdAndUser.mockResolvedValue(mockRental);
+      jest.useFakeTimers().setSystemTime(new Date('2026-04-22T10:00:00.000Z'));
+      const rental = {
+        ...mockRental,
+        startedAt: new Date('2026-04-22T09:00:00.000Z'),
+      };
+
+      repo.findByIdAndUser.mockResolvedValue(rental);
       repo.findSlotById.mockResolvedValue(mockEmptySlot);
       repo.getDefaultPricing.mockResolvedValue(mockPricing);
       const mockTx = makeMockTx();
       repo.$transaction.mockImplementation(async (fn) => fn(mockTx as never));
       walletService.applyInExistingTx.mockResolvedValue({} as never);
       repo.completeRental.mockResolvedValue({
-        ...mockRental,
+        ...rental,
         status: 'completed',
         chargeAmount: 500,
         endStationId: 'station-uuid-2',
@@ -285,6 +377,31 @@ describe('RentalsService', () => {
 
       expect(result.status).toBe('completed');
       expect(result.chargeAmount).toBe(500);
+      expect(cabinetCommands.requireOnlineCabinet).toHaveBeenCalledWith(
+        'station-uuid-2',
+      );
+      expect(cabinetCommands.lockSlot).toHaveBeenCalledWith(
+        'cabinet-uuid-1',
+        { slotId: 'return-slot-uuid-1', slotIndex: 1 },
+      );
+      expect(walletService.applyInExistingTx).toHaveBeenNthCalledWith(
+        1,
+        mockTx,
+        expect.objectContaining({
+          type: 'unfreeze',
+          amount: 3000,
+        }),
+      );
+      expect(walletService.applyInExistingTx).toHaveBeenNthCalledWith(
+        2,
+        mockTx,
+        expect.objectContaining({
+          type: 'charge',
+          amount: 500,
+        }),
+      );
+
+      jest.useRealTimers();
     });
 
     it('throws RentalNotFoundException when not found', async () => {

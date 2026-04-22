@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import { ServiceUnavailableException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 
@@ -12,6 +13,7 @@ jest.mock('../../../common/redis/redis.service', () => ({
 import { HealthController } from '../health.controller.js';
 import { PrismaService } from '../../../common/prisma/prisma.service.js';
 import { RedisService } from '../../../common/redis/redis.service.js';
+import { CabinetCommandService } from '../../iot/cabinet-command.service.js';
 
 const mockPrisma = {
   $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
@@ -19,6 +21,10 @@ const mockPrisma = {
 
 const mockRedis = {
   ping: jest.fn().mockResolvedValue('PONG'),
+};
+
+const mockMqtt = {
+  getHealthStatus: jest.fn().mockReturnValue({ status: 'ok' }),
 };
 
 describe('HealthController', () => {
@@ -30,10 +36,12 @@ describe('HealthController', () => {
       providers: [
         { provide: PrismaService, useValue: mockPrisma },
         { provide: RedisService, useValue: mockRedis },
+        { provide: CabinetCommandService, useValue: mockMqtt },
       ],
     }).compile();
     controller = module.get(HealthController);
     jest.clearAllMocks();
+    mockMqtt.getHealthStatus.mockReturnValue({ status: 'ok' });
   });
 
   describe('liveness (GET /health)', () => {
@@ -47,14 +55,16 @@ describe('HealthController', () => {
   });
 
   describe('readiness (GET /health/ready)', () => {
-    it('returns ok when both DB and Redis respond', async () => {
+    it('returns ok when DB, Redis, and MQTT respond', async () => {
       mockPrisma.$queryRaw.mockResolvedValue([{ '?column?': 1 }]);
       mockRedis.ping.mockResolvedValue('PONG');
+      mockMqtt.getHealthStatus.mockReturnValue({ status: 'ok' });
 
       const result = await controller.readiness();
       expect(result.status).toBe('ok');
       expect(result.components.database.status).toBe('ok');
       expect(result.components.redis.status).toBe('ok');
+      expect(result.components.mqtt.status).toBe('ok');
     });
 
     it('throws ServiceUnavailableException when DB fails', async () => {
@@ -75,9 +85,30 @@ describe('HealthController', () => {
       );
     });
 
+    it('throws ServiceUnavailableException when MQTT fails', async () => {
+      mockPrisma.$queryRaw.mockResolvedValue([{ '?column?': 1 }]);
+      mockRedis.ping.mockResolvedValue('PONG');
+      mockMqtt.getHealthStatus.mockReturnValue({
+        status: 'error',
+        error: 'mqtt broker unavailable',
+      });
+
+      await expect(controller.readiness()).rejects.toMatchObject({
+        response: {
+          status: 'degraded',
+          components: {
+            database: { status: 'ok' },
+            redis: { status: 'ok' },
+            mqtt: { status: 'error', error: 'mqtt broker unavailable' },
+          },
+        },
+      });
+    });
+
     it('returns sanitized error (not internal message) in component status on DB failure', async () => {
       mockPrisma.$queryRaw.mockRejectedValue(new Error('DB is down'));
       mockRedis.ping.mockResolvedValue('PONG');
+      mockMqtt.getHealthStatus.mockReturnValue({ status: 'ok' });
 
       await expect(controller.readiness()).rejects.toMatchObject({
         response: {
@@ -85,6 +116,7 @@ describe('HealthController', () => {
           components: {
             database: { status: 'error', error: 'database unreachable' },
             redis: { status: 'ok' },
+            mqtt: { status: 'ok' },
           },
         },
       });

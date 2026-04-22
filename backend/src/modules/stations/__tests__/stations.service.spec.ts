@@ -1,4 +1,6 @@
+import { jest } from '@jest/globals';
 import { NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 
 jest.mock('../../../common/prisma/prisma.service', () => ({
@@ -45,6 +47,7 @@ const mockDetail: StationDetail = {
 describe('StationsService', () => {
   let service: StationsService;
   let repo: jest.Mocked<StationsRepository>;
+  let config: jest.Mocked<ConfigService>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -61,11 +64,22 @@ describe('StationsService', () => {
             existsById: jest.fn(),
           },
         },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string) => {
+              if (key === 'MQTT_URL') return 'mqtt://localhost:1883';
+              if (key === 'MQTT_HEARTBEAT_TIMEOUT_MS') return 90_000;
+              return undefined;
+            }),
+          },
+        },
       ],
     }).compile();
 
     service = module.get(StationsService);
     repo = module.get(StationsRepository);
+    config = module.get(ConfigService);
   });
 
   describe('findNearby', () => {
@@ -100,6 +114,59 @@ describe('StationsService', () => {
       });
 
       expect(result).toHaveLength(0);
+    });
+
+    it('filters out offline and unconfigured cabinets when MQTT is enabled', async () => {
+      repo.findNearby.mockResolvedValue([
+        mockNearby[0]!,
+        {
+          ...mockNearby[0]!,
+          id: 'station-uuid-2',
+          mqttDeviceId: 'cabinet-002',
+          lastHeartbeatAt: new Date(Date.now() - 180_000),
+        },
+        {
+          ...mockNearby[0]!,
+          id: 'station-uuid-3',
+          mqttDeviceId: null,
+          lastHeartbeatAt: null,
+        },
+      ]);
+
+      const result = await service.findNearby({
+        lat: 47.9184,
+        lng: 106.9175,
+        radiusKm: 5,
+        limit: 20,
+      });
+
+      expect(result.map((station) => station.id)).toEqual(['station-uuid-1']);
+    });
+
+    it('keeps all stations when MQTT filtering is disabled', async () => {
+      config.get.mockImplementation((key: string) => {
+        if (key === 'MQTT_URL') return undefined;
+        if (key === 'MQTT_HEARTBEAT_TIMEOUT_MS') return 90_000;
+        return undefined;
+      });
+      repo.findNearby.mockResolvedValue([
+        mockNearby[0]!,
+        {
+          ...mockNearby[0]!,
+          id: 'station-uuid-2',
+          mqttDeviceId: null,
+          lastHeartbeatAt: null,
+        },
+      ]);
+
+      const result = await service.findNearby({
+        lat: 47.9184,
+        lng: 106.9175,
+        radiusKm: 5,
+        limit: 20,
+      });
+
+      expect(result).toHaveLength(2);
     });
   });
 

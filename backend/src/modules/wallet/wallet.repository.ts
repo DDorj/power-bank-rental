@@ -31,6 +31,14 @@ export class WalletRepository {
     });
   }
 
+  findOrCreateInTx(tx: Tx, userId: string): Promise<WalletRecord> {
+    return tx.wallet.upsert({
+      where: { userId },
+      update: {},
+      create: { userId },
+    });
+  }
+
   findTransactions(
     walletId: string,
     limit: number,

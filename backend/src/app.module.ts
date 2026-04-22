@@ -13,6 +13,8 @@ import { AuthModule } from './modules/auth/auth.module.js';
 import { StationsModule } from './modules/stations/stations.module.js';
 import { WalletModule } from './modules/wallet/wallet.module.js';
 import { RentalsModule } from './modules/rentals/rentals.module.js';
+import { PaymentsModule } from './modules/payments/payments.module.js';
+import { IotModule } from './modules/iot/iot.module.js';
 
 @Module({
   imports: [
@@ -50,6 +52,8 @@ import { RentalsModule } from './modules/rentals/rentals.module.js';
     StationsModule,
     WalletModule,
     RentalsModule,
+    PaymentsModule,
+    IotModule,
   ],
 })
 export class AppModule {}

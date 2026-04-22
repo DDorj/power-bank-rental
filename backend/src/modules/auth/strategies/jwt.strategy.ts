@@ -5,6 +5,10 @@ import { ConfigService } from '@nestjs/config';
 import type { EnvConfig } from '../../../config/env.schema.js';
 import type { JwtPayload } from '../auth.types.js';
 import type { AuthUser } from '../../../common/decorators/current-user.decorator.js';
+import {
+  DEFAULT_TOKEN_AUDIENCE,
+  isTokenAudience,
+} from '../../../common/auth/token-audience.js';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -18,6 +22,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   validate(payload: JwtPayload): AuthUser {
     if (!payload.sub) throw new UnauthorizedException();
-    return { id: payload.sub, trustTier: payload.tier, role: payload.role };
+    return {
+      id: payload.sub,
+      trustTier: payload.tier,
+      role: payload.role,
+      aud: isTokenAudience(payload.aud)
+        ? payload.aud
+        : DEFAULT_TOKEN_AUDIENCE,
+    };
   }
 }

@@ -17,6 +17,9 @@ export class HealthComponentsDto {
 
   @ApiProperty({ type: HealthComponentStatusDto })
   redis!: HealthComponentStatusDto;
+
+  @ApiProperty({ type: HealthComponentStatusDto })
+  mqtt!: HealthComponentStatusDto;
 }
 
 export class HealthLivenessResponseDto {

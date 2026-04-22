@@ -5,6 +5,7 @@ export interface AuthUser {
   id: string;
   trustTier: number;
   role: string;
+  aud: string;
 }
 
 export const CurrentUser = createParamDecorator(

@@ -2,6 +2,7 @@ export interface JwtPayload {
   sub: string;
   tier: number;
   role: string;
+  aud: string;
 }
 
 export interface TokenPair {

@@ -15,6 +15,7 @@ import { WalletService } from './wallet.service.js';
 import { TopupDto } from './dto/topup.dto.js';
 import {
   WalletSummaryResponseDto,
+  WalletTopupInvoiceResponseDto,
   WalletTransactionResponseDto,
   WalletTransactionsResponseDto,
 } from './dto/wallet-response.dto.js';
@@ -23,13 +24,17 @@ import { TrustTierGuard } from '../../common/guards/trust-tier.guard.js';
 import { RequireTier } from '../../common/decorators/require-tier.decorator.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthUser } from '../../common/decorators/current-user.decorator.js';
+import { PaymentsService } from '../payments/payments.service.js';
 
 @ApiTags('Wallet')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('wallet')
 export class WalletController {
-  constructor(private readonly service: WalletService) {}
+  constructor(
+    private readonly service: WalletService,
+    private readonly paymentsService: PaymentsService,
+  ) {}
 
   @ApiSuccessResponse({
     status: HttpStatus.OK,
@@ -57,7 +62,21 @@ export class WalletController {
     return this.service.getTransactions(user.id, p, l);
   }
 
-  // Dev/test endpoint — real topup will go through Bonum QR flow
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(TrustTierGuard)
+  @RequireTier(1)
+  @ApiBody({ type: TopupDto })
+  @ApiSuccessResponse({
+    status: HttpStatus.CREATED,
+    type: WalletTopupInvoiceResponseDto,
+  })
+  @Post('topup')
+  @HttpCode(HttpStatus.CREATED)
+  topup(@CurrentUser() user: AuthUser, @Body() dto: TopupDto) {
+    return this.paymentsService.createWalletTopupInvoice(user.id, dto.amount);
+  }
+
+  // Dev/test endpoint — real topup goes through Bonum QR flow
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseGuards(TrustTierGuard)
   @RequireTier(1)

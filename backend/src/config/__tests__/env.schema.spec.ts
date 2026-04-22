@@ -36,4 +36,15 @@ describe('validateEnv', () => {
       'Environment validation failed',
     );
   });
+
+  it('accepts OTP_FIXED_CODE when it is a 6-digit string', () => {
+    const result = validateEnv({ ...base, OTP_FIXED_CODE: '123456' });
+    expect(result.OTP_FIXED_CODE).toBe('123456');
+  });
+
+  it('throws when OTP_FIXED_CODE is not a 6-digit string', () => {
+    expect(() => validateEnv({ ...base, OTP_FIXED_CODE: '12345' })).toThrow(
+      'Environment validation failed',
+    );
+  });
 });

@@ -5,9 +5,10 @@ import { RentalsRepository } from './rentals.repository.js';
 import { WalletModule } from '../wallet/wallet.module.js';
 import { RedisModule } from '../../common/redis/redis.module.js';
 import { PrismaModule } from '../../common/prisma/prisma.module.js';
+import { IotModule } from '../iot/iot.module.js';
 
 @Module({
-  imports: [WalletModule, RedisModule, PrismaModule],
+  imports: [WalletModule, RedisModule, PrismaModule, IotModule],
   controllers: [RentalsController],
   providers: [RentalsService, RentalsRepository],
   exports: [RentalsService],

@@ -73,6 +73,45 @@ export class WalletTransactionResponseDto {
   createdAt!: Date;
 }
 
+export class WalletTopupInvoiceResponseDto {
+  @ApiProperty({ format: 'uuid' })
+  id!: string;
+
+  @ApiProperty({ format: 'uuid' })
+  userId!: string;
+
+  @ApiProperty({ example: 'topup-3a2d8a9e-7b34-4cc7-9648-6f652df27fd7' })
+  transactionId!: string;
+
+  @ApiProperty({ example: 'INV-123456789' })
+  invoiceId!: string;
+
+  @ApiProperty({ example: 5000 })
+  amount!: number;
+
+  @ApiProperty({ example: 'pending' })
+  status!: 'pending' | 'paid' | 'failed' | 'expired';
+
+  @ApiProperty({
+    example: 'https://ecommerce.bonum.mn/ecommerce?invoiceId=c511ea63...',
+  })
+  followUpLink!: string;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-04-22T11:00:00.000Z',
+  })
+  expiresAt!: Date;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-04-22T10:55:00.000Z',
+  })
+  createdAt!: Date;
+}
+
 export class WalletTransactionsResponseDto {
   @ApiProperty({ type: WalletTransactionResponseDto, isArray: true })
   data!: WalletTransactionResponseDto[];

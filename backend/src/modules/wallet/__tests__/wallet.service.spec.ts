@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 
 jest.mock('../../../common/prisma/prisma.service', () => ({
@@ -47,6 +48,7 @@ describe('WalletService', () => {
           useValue: {
             findByUserId: jest.fn(),
             findOrCreate: jest.fn(),
+            findOrCreateInTx: jest.fn(),
             createForUser: jest.fn(),
             findTransactions: jest.fn(),
             countTransactions: jest.fn(),
@@ -90,6 +92,7 @@ describe('WalletService', () => {
     beforeEach(() => {
       redis.acquireLock.mockResolvedValue(mockRelease);
       repo.$transaction.mockImplementation(async (fn) => fn({} as never));
+      repo.findOrCreateInTx.mockResolvedValue(mockWallet);
       repo.lockWalletByUserId.mockResolvedValue(mockWallet);
       repo.applyInTx.mockResolvedValue(mockTxRecord);
     });
@@ -143,10 +146,33 @@ describe('WalletService', () => {
         amount: 3000,
       });
 
+      expect(repo.findOrCreateInTx).toHaveBeenCalledWith({}, 'user-uuid-1');
       expect(repo.applyInTx).toHaveBeenCalledWith(
         {},
         expect.objectContaining({ newBalance: 8000, newFrozen: 0 }),
       );
+    });
+
+    it('creates wallet row inside transaction when missing', async () => {
+      repo.findOrCreateInTx.mockResolvedValue({
+        ...mockWallet,
+        balance: 0,
+        frozenAmount: 0,
+      });
+      repo.lockWalletByUserId.mockResolvedValue({
+        ...mockWallet,
+        balance: 0,
+        frozenAmount: 0,
+      });
+      repo.applyInTx.mockResolvedValue(mockTxRecord);
+
+      await service.applyInExistingTx({} as never, {
+        userId: 'new-user',
+        type: 'topup',
+        amount: 1000,
+      });
+
+      expect(repo.findOrCreateInTx).toHaveBeenCalledWith({}, 'new-user');
     });
 
     it('freeze: throws InsufficientBalanceException when amount > available', async () => {
@@ -186,7 +212,6 @@ describe('WalletService', () => {
     });
 
     it('charge: throws InsufficientBalanceException when available balance < amount', async () => {
-      // H-3: charge checks balance - frozenAmount, not balance alone
       repo.lockWalletByUserId.mockResolvedValue({
         ...mockWallet,
         balance: 500,
@@ -197,7 +222,7 @@ describe('WalletService', () => {
         service.applyInExistingTx({} as never, {
           userId: 'user-uuid-1',
           type: 'charge',
-          amount: 300, // available = 500 - 300 = 200, charge 300 → fail
+          amount: 300,
         }),
       ).rejects.toThrow(InsufficientBalanceException);
     });
@@ -213,7 +238,7 @@ describe('WalletService', () => {
       await service.applyInExistingTx({} as never, {
         userId: 'user-uuid-1',
         type: 'charge',
-        amount: 1500, // available = 5000 - 3000 = 2000 >= 1500 → ok
+        amount: 1500,
       });
 
       expect(repo.applyInTx).toHaveBeenCalledWith(

@@ -60,6 +60,7 @@ export class WalletService {
 
     try {
       return await this.repo.$transaction(async (tx) => {
+        await this.repo.findOrCreateInTx(tx, params.userId);
         // C-5: single SELECT FOR UPDATE by userId — no pre-lock findUnique
         const lockedWallet = await this.repo.lockWalletByUserId(
           tx,
@@ -90,6 +91,7 @@ export class WalletService {
     tx: Tx,
     params: ApplyTransactionParams,
   ): Promise<WalletTransactionRecord> {
+    await this.repo.findOrCreateInTx(tx, params.userId);
     const lockedWallet = await this.repo.lockWalletByUserId(tx, params.userId);
     const { newBalance, newFrozen } = this.calculateNewState(
       lockedWallet.balance,

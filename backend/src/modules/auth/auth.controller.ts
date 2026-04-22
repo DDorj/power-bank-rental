@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Post,
@@ -13,6 +14,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiFoundResponse,
+  ApiHeader,
   ApiNoContentResponse,
   ApiQuery,
   ApiTags,
@@ -33,8 +35,22 @@ import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthUser } from '../../common/decorators/current-user.decorator.js';
+import { BadRequestException } from '@nestjs/common';
+import {
+  parseTokenAudience,
+  type TokenAudience,
+} from '../../common/auth/token-audience.js';
+import { buildAppError } from '../../common/errors/app-errors.js';
 
 const APP_SCHEME = 'powerbank://auth/callback';
+
+function resolveAudience(clientType: string | undefined): TokenAudience {
+  const audience = parseTokenAudience(clientType);
+  if (!audience) {
+    throw new BadRequestException(buildAppError('AUTH_CLIENT_INVALID'));
+  }
+  return audience;
+}
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -57,14 +73,26 @@ export class AuthController {
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiBody({ type: OtpVerifyDto })
+  @ApiHeader({
+    name: 'x-client-type',
+    required: false,
+    description: 'Optional client type. Allowed: app, admin',
+  })
   @ApiSuccessResponse({
     status: HttpStatus.OK,
     type: OtpVerifyResponseDto,
   })
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
-  verifyOtp(@Body() dto: OtpVerifyDto) {
-    return this.authService.verifyOtp(dto.phone, dto.code);
+  verifyOtp(
+    @Body() dto: OtpVerifyDto,
+    @Headers('x-client-type') clientType?: string,
+  ) {
+    return this.authService.verifyOtp(
+      dto.phone,
+      dto.code,
+      resolveAudience(clientType),
+    );
   }
 
   // ─── Google OAuth ─────────────────────────────────────────────────────────
@@ -73,10 +101,21 @@ export class AuthController {
   @ApiFoundResponse({
     description: 'Google OAuth consent screen рүү redirect хийнэ.',
   })
+  @ApiQuery({
+    name: 'clientType',
+    required: false,
+    type: String,
+    description: 'Optional client type. Allowed: app, admin',
+  })
   @Get('google')
-  async googleAuth(@Res() res: Response) {
+  async googleAuth(
+    @Query('clientType') clientType: string | undefined,
+    @Res() res: Response,
+  ) {
     try {
-      const { authUrl } = await this.authService.initiateGoogleAuth();
+      const { authUrl } = await this.authService.initiateGoogleAuth(
+        resolveAudience(clientType),
+      );
       return res.redirect(authUrl);
     } catch {
       return res.status(HttpStatus.SERVICE_UNAVAILABLE).json({

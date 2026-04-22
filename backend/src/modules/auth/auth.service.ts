@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -22,6 +24,13 @@ import type {
   DanUserInfo,
 } from './auth.types.js';
 import type { UserRecord } from '../users/users.types.js';
+import {
+  DEFAULT_TOKEN_AUDIENCE,
+  formatRefreshToken,
+  parseAudienceFromRefreshToken,
+  TOKEN_AUDIENCES,
+  type TokenAudience,
+} from '../../common/auth/token-audience.js';
 
 const OTP_TTL_SEC = 300;
 const OTP_COOLDOWN_SEC = 60;
@@ -101,13 +110,21 @@ export class AuthService {
       }
     }
 
-    // C-3: cryptographically random 6-digit OTP
-    const code = this.generateOtp();
+    const { code, isFixed } = this.resolveOtpCode();
     const cooldownUntil = Date.now() + OTP_COOLDOWN_SEC * 1000;
     const entry: OtpEntry = { code, attempts: 0, cooldownUntil };
 
     await this.redis.set(key, JSON.stringify(entry), 'EX', OTP_TTL_SEC);
-    await this.sms.sendOtp(phone, code);
+    try {
+      await this.sms.sendOtp(phone, code);
+    } catch (error) {
+      if (!isFixed) throw error;
+
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `SMS unavailable, continuing with fixed OTP for ${phone}: ${msg}`,
+      );
+    }
 
     return { expiresAt: new Date(Date.now() + OTP_TTL_SEC * 1000) };
   }
@@ -115,6 +132,7 @@ export class AuthService {
   async verifyOtp(
     phone: string,
     code: string,
+    audience: TokenAudience = DEFAULT_TOKEN_AUDIENCE,
   ): Promise<TokenPair & { user: UserRecord }> {
     const key = this.otpKey(phone);
     const raw = await this.redis.get(key);
@@ -144,14 +162,16 @@ export class AuthService {
       throw new UnauthorizedException(buildAppError('USER_INACTIVE'));
     }
 
-    const tokens = await this.issueTokens(user);
+    const tokens = await this.issueTokens(user, audience);
     return { ...tokens, user };
   }
 
   // ─── Google OAuth ─────────────────────────────────────────────────────────
 
   // C-2 + S-3: state management and URL building moved here from controller
-  async initiateGoogleAuth(): Promise<{ authUrl: string }> {
+  async initiateGoogleAuth(
+    audience: TokenAudience = DEFAULT_TOKEN_AUDIENCE,
+  ): Promise<{ authUrl: string }> {
     const clientId = this.config.get('GOOGLE_CLIENT_ID', { infer: true });
     const callbackUrl = this.config.get('GOOGLE_CALLBACK_URL', { infer: true });
 
@@ -160,7 +180,12 @@ export class AuthService {
     }
 
     const state = randomBytes(32).toString('hex');
-    await this.redis.set(`google:state:${state}`, '1', 'EX', 300);
+    await this.redis.set(
+      `google:state:${state}`,
+      JSON.stringify({ aud: audience }),
+      'EX',
+      300,
+    );
 
     const params = new URLSearchParams({
       response_type: 'code',
@@ -181,10 +206,16 @@ export class AuthService {
     code: string,
     state: string,
   ): Promise<TokenPair & { user: UserRecord }> {
-    const valid = await this.redis.getdel(`google:state:${state}`);
-    if (!valid) {
+    const rawState = await this.redis.getdel(`google:state:${state}`);
+    if (!rawState) {
       throw new BadRequestException(buildAppError('GOOGLE_AUTH_FAILED'));
     }
+
+    const parsed = JSON.parse(rawState) as { aud?: string };
+    const audience =
+      parsed.aud === TOKEN_AUDIENCES.ADMIN_PANEL
+        ? TOKEN_AUDIENCES.ADMIN_PANEL
+        : DEFAULT_TOKEN_AUDIENCE;
 
     const clientId = this.config.get('GOOGLE_CLIENT_ID', { infer: true })!;
     const clientSecret = this.config.get('GOOGLE_CLIENT_SECRET', {
@@ -200,17 +231,18 @@ export class AuthService {
       clientSecret,
       callbackUrl,
     );
-    return this.googleLogin(userInfo);
+    return this.googleLogin(userInfo, audience);
   }
 
   async googleLogin(
     info: GoogleUserInfo,
+    audience: TokenAudience = DEFAULT_TOKEN_AUDIENCE,
   ): Promise<TokenPair & { user: UserRecord }> {
     const user = await this.findOrCreateGoogleUser(info);
     if (!user.isActive) {
       throw new UnauthorizedException(buildAppError('USER_INACTIVE'));
     }
-    const tokens = await this.issueTokens(user);
+    const tokens = await this.issueTokens(user, audience);
     return { ...tokens, user };
   }
 
@@ -272,6 +304,11 @@ export class AuthService {
   // ─── Token management ─────────────────────────────────────────────────────
 
   async refresh(rawToken: string): Promise<TokenPair> {
+    const audience = parseAudienceFromRefreshToken(rawToken);
+    if (!audience) {
+      throw new UnauthorizedException(buildAppError('INVALID_REFRESH_TOKEN'));
+    }
+
     const tokenHash = this.hashToken(rawToken);
     const record = await this.authRepo.findRefreshToken(tokenHash);
 
@@ -286,7 +323,7 @@ export class AuthService {
       throw new UnauthorizedException(buildAppError('USER_INACTIVE'));
     }
 
-    return this.issueTokens(user);
+    return this.issueTokens(user, audience);
   }
 
   async logout(rawToken: string): Promise<void> {
@@ -324,15 +361,26 @@ export class AuthService {
 
   // ─── Private helpers ──────────────────────────────────────────────────────
 
-  private async issueTokens(user: UserRecord): Promise<TokenPair> {
+  private async issueTokens(
+    user: UserRecord,
+    audience: TokenAudience = DEFAULT_TOKEN_AUDIENCE,
+  ): Promise<TokenPair> {
+    if (audience === TOKEN_AUDIENCES.ADMIN_PANEL && user.role !== 'admin') {
+      throw new ForbiddenException(buildAppError('ADMIN_AUDIENCE_FORBIDDEN'));
+    }
+
     const payload: JwtPayload = {
       sub: user.id,
       tier: user.trustTier,
       role: user.role,
+      aud: audience,
     };
     const accessToken = this.jwtService.sign(payload);
 
-    const rawRefresh = randomBytes(REFRESH_TOKEN_BYTES).toString('hex');
+    const rawRefresh = formatRefreshToken(
+      audience,
+      randomBytes(REFRESH_TOKEN_BYTES).toString('hex'),
+    );
     const tokenHash = this.hashToken(rawRefresh);
 
     const refreshExpiresIn = this.config.get('JWT_REFRESH_EXPIRES_IN', {
@@ -342,6 +390,18 @@ export class AuthService {
     await this.authRepo.createRefreshToken(user.id, tokenHash, expiresAt);
 
     return { accessToken, refreshToken: rawRefresh };
+  }
+
+  private resolveOtpCode(): { code: string; isFixed: boolean } {
+    const fixedCode = this.config.get('OTP_FIXED_CODE', { infer: true });
+    const nodeEnv = this.config.get('NODE_ENV', { infer: true });
+
+    if (fixedCode && nodeEnv !== 'production') {
+      this.logger.warn('Using fixed OTP fallback because OTP_FIXED_CODE is set');
+      return { code: fixedCode, isFixed: true };
+    }
+
+    return { code: this.generateOtp(), isFixed: false };
   }
 
   private async findOrCreatePhoneUser(phone: string): Promise<UserRecord> {
@@ -373,6 +433,7 @@ export class AuthService {
       this.logger.warn(
         `Google account ${info.sub} linked to existing email user ${byEmail.id}`,
       );
+      await this.usersRepo.linkIdentity(byEmail.id, 'google', info.sub);
       return byEmail;
     }
 
@@ -395,6 +456,13 @@ export class AuthService {
     const user = await this.usersRepo.findById(userId);
     if (!user) throw new UnauthorizedException(buildAppError('USER_NOT_FOUND'));
 
+    const existing = await this.authRepo.findDanVerificationByNationalIdHash(
+      nationalIdHash,
+    );
+    if (existing && existing.userId !== userId) {
+      throw new ConflictException(buildAppError('DAN_ALREADY_VERIFIED'));
+    }
+
     // C-8: persist encrypted PII and set expiry
     const now = new Date();
     const expiresAt = new Date(now);
@@ -405,14 +473,14 @@ export class AuthService {
       nationalIdHash,
       givenName: this.pii.encrypt(info.given_name),
       familyName: this.pii.encrypt(info.family_name),
-      birthdate: info.birthdate,
-      gender: info.gender,
+      birthdate: info.birthdate ? this.pii.encrypt(info.birthdate) : undefined,
+      gender: info.gender ? this.pii.encrypt(info.gender) : undefined,
       verifiedAt: now,
       expiresAt,
     });
 
     this.logger.log(`DAN verification complete for user ${userId}`);
-    return this.usersRepo.updateTrustTier(userId, 2);
+    return this.usersRepo.markDanVerified(userId, now, 2);
   }
 
   private async exchangeGoogleCode(

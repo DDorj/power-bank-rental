@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { RedisService } from '../../common/redis/redis.service.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import { RentalsRepository } from './rentals.repository.js';
+import { CabinetCommandService } from '../iot/cabinet-command.service.js';
 import {
   ActiveRentalExistsException,
   NoPricingRuleException,
@@ -20,6 +21,7 @@ import type {
 
 const RENTAL_LOCK_TTL_MS = 10_000;
 const WALLET_LOCK_TTL_MS = 5_000;
+const CABINET_SLOT_LOCK_TTL_MS = 65_000;
 
 @Injectable()
 export class RentalsService {
@@ -27,6 +29,7 @@ export class RentalsService {
     private readonly repo: RentalsRepository,
     private readonly redis: RedisService,
     private readonly walletService: WalletService,
+    private readonly cabinetCommands: CabinetCommandService,
   ) {}
 
   async start(params: StartRentalParams): Promise<RentalRecord> {
@@ -41,55 +44,114 @@ export class RentalsService {
 
       const pricing = await this.repo.getDefaultPricing();
       if (!pricing) throw new NoPricingRuleException();
-
-      // C-6: hold wallet lock so applyInExistingTx is protected
-      const releaseWallet = await this.redis.acquireLock(
-        `wallet:${params.userId}`,
-        WALLET_LOCK_TTL_MS,
+      const cabinetId = await this.cabinetCommands.requireOnlineCabinet(
+        params.stationId,
+      );
+      const releaseCabinetSlot = await this.redis.acquireLock(
+        `cabinet:${cabinetId}:slot:${params.slotId}`,
+        CABINET_SLOT_LOCK_TTL_MS,
       );
 
       try {
-        return await this.repo.$transaction(async (tx) => {
-          // C-4: slot check inside tx — avoids race between read and tx start
-          const slot = await this.repo.findSlotWithPowerBankInTx(
-            tx,
-            params.slotId,
-          );
+        // C-6: hold wallet lock so applyInExistingTx is protected
+        const releaseWallet = await this.redis.acquireLock(
+          `wallet:${params.userId}`,
+          WALLET_LOCK_TTL_MS,
+        );
 
-          if (!slot || slot.stationId !== params.stationId)
-            throw new SlotNotFoundException();
-          if (!slot.powerBank) throw new SlotEmptyException();
-          if (slot.powerBank.status !== 'idle')
-            throw new PowerBankNotIdleException();
+        try {
+          const prepared = await this.repo.$transaction(async (tx) => {
+            const slot = await this.repo.findSlotWithPowerBankInTx(
+              tx,
+              params.slotId,
+            );
 
-          await this.walletService.applyInExistingTx(tx, {
-            userId: params.userId,
-            type: 'freeze',
-            amount: pricing.depositAmount,
-            referenceId: slot.powerBank.id,
-            description: `Power bank ${slot.powerBank.serialNumber} барьцаа`,
+            if (!slot || slot.stationId !== params.stationId)
+              throw new SlotNotFoundException();
+            if (!slot.powerBank) throw new SlotEmptyException();
+            if (slot.powerBank.status !== 'idle')
+              throw new PowerBankNotIdleException();
+
+            await this.walletService.applyInExistingTx(tx, {
+              userId: params.userId,
+              type: 'freeze',
+              amount: pricing.depositAmount,
+              referenceId: slot.powerBank.id,
+              description: `Power bank ${slot.powerBank.serialNumber} барьцаа`,
+            });
+
+            return {
+              powerBankId: slot.powerBank.id,
+              powerBankSerial: slot.powerBank.serialNumber,
+              slotId: slot.id,
+              slotIndex: slot.slotIndex,
+              depositAmount: pricing.depositAmount,
+            };
           });
 
-          await tx.powerBank.update({
-            where: { id: slot.powerBank.id },
-            data: { status: 'rented', stationId: null },
-          });
+          try {
+            await this.cabinetCommands.releaseSlot(cabinetId, {
+              slotId: prepared.slotId,
+              slotIndex: prepared.slotIndex,
+            });
+          } catch (error) {
+            await this.releaseFrozenDeposit(
+              params.userId,
+              prepared.depositAmount,
+              prepared.powerBankId,
+              'Cabinet нээгдээгүй тул барьцаа суллах',
+            );
+            throw error;
+          }
 
-          await tx.slot.update({
-            where: { id: slot.id },
-            data: { status: 'empty', powerBankId: null },
-          });
+          try {
+            return await this.repo.$transaction(async (tx) => {
+              const slot = await this.repo.findSlotWithPowerBankInTx(
+                tx,
+                params.slotId,
+              );
 
-          return this.repo.createRental(tx, {
-            userId: params.userId,
-            powerBankId: slot.powerBank.id,
-            startStationId: params.stationId,
-            startSlotId: params.slotId,
-            depositAmount: pricing.depositAmount,
-          });
-        });
+              if (!slot || slot.stationId !== params.stationId)
+                throw new SlotNotFoundException();
+              if (!slot.powerBank || slot.powerBank.id !== prepared.powerBankId) {
+                throw new SlotEmptyException();
+              }
+              if (slot.powerBank.status !== 'idle') {
+                throw new PowerBankNotIdleException();
+              }
+
+              await tx.powerBank.update({
+                where: { id: slot.powerBank.id },
+                data: { status: 'rented', stationId: null },
+              });
+
+              await tx.slot.update({
+                where: { id: slot.id },
+                data: { status: 'empty', powerBankId: null },
+              });
+
+              return this.repo.createRental(tx, {
+                userId: params.userId,
+                powerBankId: slot.powerBank.id,
+                startStationId: params.stationId,
+                startSlotId: params.slotId,
+                depositAmount: pricing.depositAmount,
+              });
+            });
+          } catch (error) {
+            await this.releaseFrozenDeposit(
+              params.userId,
+              prepared.depositAmount,
+              prepared.powerBankId,
+              `Cabinet release амжилтгүй тул барьцаа суллах`,
+            );
+            throw error;
+          }
+        } finally {
+          await releaseWallet();
+        }
       } finally {
-        await releaseWallet();
+        await releaseCabinetSlot();
       }
     } finally {
       await releaseRental();
@@ -117,12 +179,20 @@ export class RentalsService {
 
     const pricing = await this.repo.getDefaultPricing();
     if (!pricing) throw new NoPricingRuleException();
+    const cabinetId = await this.cabinetCommands.requireOnlineCabinet(
+      params.stationId,
+    );
 
     const returnedAt = new Date();
     const { chargeAmount } = this.calculateCost(
       rental.startedAt,
       returnedAt,
       pricing,
+    );
+
+    const releaseCabinetSlot = await this.redis.acquireLock(
+      `cabinet:${cabinetId}:slot:${params.slotId}`,
+      CABINET_SLOT_LOCK_TTL_MS,
     );
 
     // C-6: hold wallet lock so applyInExistingTx is protected
@@ -132,6 +202,11 @@ export class RentalsService {
     );
 
     try {
+      await this.cabinetCommands.lockSlot(cabinetId, {
+        slotId: slot.id,
+        slotIndex: slot.slotIndex,
+      });
+
       return await this.repo.$transaction(async (tx) => {
         // H-8: verify power bank is still in 'rented' state
         const powerBank = await tx.powerBank.findUnique({
@@ -144,6 +219,14 @@ export class RentalsService {
           });
         }
 
+        await this.walletService.applyInExistingTx(tx, {
+          userId: params.userId,
+          type: 'unfreeze',
+          amount: rental.depositAmount,
+          referenceId: rental.id,
+          description: `Барьцаа суллах`,
+        });
+
         if (chargeAmount > 0) {
           await this.walletService.applyInExistingTx(tx, {
             userId: params.userId,
@@ -153,14 +236,6 @@ export class RentalsService {
             description: `Түрээсийн төлбөр`,
           });
         }
-
-        await this.walletService.applyInExistingTx(tx, {
-          userId: params.userId,
-          type: 'unfreeze',
-          amount: rental.depositAmount,
-          referenceId: rental.id,
-          description: `Барьцаа суллах`,
-        });
 
         await tx.powerBank.update({
           where: { id: rental.powerBankId },
@@ -181,6 +256,7 @@ export class RentalsService {
       });
     } finally {
       await releaseWallet();
+      await releaseCabinetSlot();
     }
   }
 
@@ -216,5 +292,22 @@ export class RentalsService {
     const chargeAmount = Math.min(rawCharge, pricing.dailyMax);
 
     return { durationMinutes, chargeAmount };
+  }
+
+  private async releaseFrozenDeposit(
+    userId: string,
+    amount: number,
+    referenceId: string,
+    description: string,
+  ): Promise<void> {
+    await this.repo.$transaction(async (tx) => {
+      await this.walletService.applyInExistingTx(tx, {
+        userId,
+        type: 'unfreeze',
+        amount,
+        referenceId,
+        description,
+      });
+    });
   }
 }

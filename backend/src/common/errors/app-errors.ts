@@ -36,6 +36,18 @@ export const APP_ERRORS = {
     code: 'INVALID_REFRESH_TOKEN',
     message: 'Нэвтрэлтийн мэдээлэл хүчингүй байна',
   },
+  AUTH_CLIENT_INVALID: {
+    code: 'AUTH_CLIENT_INVALID',
+    message: 'Token client type хүчингүй байна',
+  },
+  TOKEN_AUDIENCE_INVALID: {
+    code: 'TOKEN_AUDIENCE_INVALID',
+    message: 'Энэ token энэ API-д зориулагдаагүй байна',
+  },
+  ADMIN_AUDIENCE_FORBIDDEN: {
+    code: 'ADMIN_AUDIENCE_FORBIDDEN',
+    message: 'Admin token зөвхөн admin хэрэглэгчид олгогдоно',
+  },
   USER_INACTIVE: {
     code: 'USER_INACTIVE',
     message: 'Таны бүртгэл түр зогссон байна',
@@ -63,6 +75,54 @@ export const APP_ERRORS = {
   GOOGLE_NOT_CONFIGURED: {
     code: 'GOOGLE_NOT_CONFIGURED',
     message: 'Google интеграц тохируулагдаагүй байна',
+  },
+  BONUM_NOT_CONFIGURED: {
+    code: 'BONUM_NOT_CONFIGURED',
+    message: 'Bonum интеграц тохируулагдаагүй байна',
+  },
+  BONUM_INVOICE_CREATE_FAILED: {
+    code: 'BONUM_INVOICE_CREATE_FAILED',
+    message: 'Bonum invoice үүсгэхэд алдаа гарлаа',
+  },
+  BONUM_AUTH_FAILED: {
+    code: 'BONUM_AUTH_FAILED',
+    message: 'Bonum нэвтрэлт амжилтгүй болсон',
+  },
+  BONUM_INVALID_SIGNATURE: {
+    code: 'BONUM_INVALID_SIGNATURE',
+    message: 'Bonum webhook signature хүчингүй байна',
+  },
+  BONUM_INVOICE_NOT_FOUND: {
+    code: 'BONUM_INVOICE_NOT_FOUND',
+    message: 'Bonum invoice олдсонгүй',
+  },
+  BONUM_INVALID_PAYLOAD: {
+    code: 'BONUM_INVALID_PAYLOAD',
+    message: 'Bonum webhook payload хүчингүй байна',
+  },
+  MQTT_NOT_CONFIGURED: {
+    code: 'MQTT_NOT_CONFIGURED',
+    message: 'MQTT broker тохируулагдаагүй байна',
+  },
+  MQTT_UNAVAILABLE: {
+    code: 'MQTT_UNAVAILABLE',
+    message: 'MQTT broker-т холбогдож чадсангүй',
+  },
+  CABINET_NOT_CONFIGURED: {
+    code: 'CABINET_NOT_CONFIGURED',
+    message: 'Станцын cabinet тохируулагдаагүй байна',
+  },
+  CABINET_OFFLINE: {
+    code: 'CABINET_OFFLINE',
+    message: 'Cabinet offline байна',
+  },
+  CABINET_ACK_TIMEOUT: {
+    code: 'CABINET_ACK_TIMEOUT',
+    message: 'Cabinet командад хугацаандаа хариу өгсөнгүй',
+  },
+  CABINET_COMMAND_FAILED: {
+    code: 'CABINET_COMMAND_FAILED',
+    message: 'Cabinet команд амжилтгүй боллоо',
   },
   TRUST_TIER_INSUFFICIENT: {
     code: 'TRUST_TIER_INSUFFICIENT',

@@ -10,6 +10,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import { RedisService } from '../../common/redis/redis.service.js';
 import { ApiSuccessResponse } from '../../common/swagger/api-success-response.decorator.js';
+import { CabinetCommandService } from '../iot/cabinet-command.service.js';
 import {
   HealthComponentStatusDto,
   HealthLivenessResponseDto,
@@ -24,6 +25,7 @@ export class HealthController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly cabinetCommands: CabinetCommandService,
   ) {}
 
   @ApiSuccessResponse({ type: HealthLivenessResponseDto })
@@ -40,21 +42,25 @@ export class HealthController {
   @Get('ready')
   @HttpCode(HttpStatus.OK)
   async readiness(): Promise<HealthReadinessResponseDto> {
-    const [database, redis] = await Promise.all([
+    const [database, redis, mqtt] = await Promise.all([
       this.checkDatabase(),
       this.checkRedis(),
+      Promise.resolve(this.checkMqtt()),
     ]);
 
-    const allOk = database.status === 'ok' && redis.status === 'ok';
+    const allOk =
+      database.status === 'ok' &&
+      redis.status === 'ok' &&
+      mqtt.status === 'ok';
 
     if (!allOk) {
       throw new ServiceUnavailableException({
         status: 'degraded',
-        components: { database, redis },
+        components: { database, redis, mqtt },
       });
     }
 
-    return { status: 'ok', components: { database, redis } };
+    return { status: 'ok', components: { database, redis, mqtt } };
   }
 
   private async checkDatabase(): Promise<HealthComponentStatusDto> {
@@ -85,5 +91,20 @@ export class HealthController {
         error: 'redis unreachable',
       };
     }
+  }
+
+  private checkMqtt(): HealthComponentStatusDto {
+    const start = Date.now();
+    const status = this.cabinetCommands.getHealthStatus();
+
+    if (status.status === 'ok') {
+      return { status: 'ok', latencyMs: Date.now() - start };
+    }
+
+    return {
+      status: 'error',
+      latencyMs: Date.now() - start,
+      error: status.error ?? 'mqtt broker unavailable',
+    };
   }
 }

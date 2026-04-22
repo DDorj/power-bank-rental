@@ -10,6 +10,8 @@ export const envSchema = z.object({
   REDIS_URL: z.string().url(),
 
   MQTT_URL: z.string().min(1).optional(),
+  MQTT_ACK_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  MQTT_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
 
   CORS_ORIGINS: z
     .string()
@@ -39,6 +41,21 @@ export const envSchema = z.object({
   // SMS (Mobicom / Unitel)
   SMS_API_URL: z.string().url().optional(),
   SMS_API_KEY: z.string().min(1).optional(),
+  OTP_FIXED_CODE: z.string().regex(/^\d{6}$/).optional(),
+
+  // Bonum Gateway QR pay
+  BONUM_BASE_URL: z.string().url().optional(),
+  BONUM_APP_SECRET: z.string().min(1).optional(),
+  BONUM_TERMINAL_ID: z.string().min(1).optional(),
+  BONUM_MERCHANT_CHECKSUM_KEY: z.string().min(1).optional(),
+  MERCHANT_CHECKSUM_KEY: z.string().min(1).optional(),
+  BONUM_CALLBACK_URL: z.string().url().optional(),
+  BONUM_INVOICE_EXPIRES_IN: z.coerce.number().int().positive().optional(),
+  BONUM_QR_EXPIRES_IN: z.coerce.number().int().positive().optional(),
+  // Deprecated Bonum config keys kept temporarily for compatibility
+  BONUM_API_URL: z.string().url().optional(),
+  BONUM_MERCHANT_ID: z.string().min(1).optional(),
+  BONUM_MERCHANT_KEY: z.string().min(1).optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

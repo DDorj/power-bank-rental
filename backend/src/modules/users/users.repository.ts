@@ -5,6 +5,7 @@ import type {
   CreateUserParams,
   FindByIdentityParams,
 } from './users.types.js';
+import type { AuthProvider } from '../../../generated/prisma/enums.js';
 
 export interface IUsersRepository {
   findById(id: string): Promise<UserRecord | null>;
@@ -13,6 +14,12 @@ export interface IUsersRepository {
   findByIdentity(params: FindByIdentityParams): Promise<UserRecord | null>;
   create(params: CreateUserParams): Promise<UserRecord>;
   updateTrustTier(userId: string, tier: number): Promise<UserRecord>;
+  markDanVerified(userId: string, verifiedAt: Date, tier: number): Promise<UserRecord>;
+  linkIdentity(
+    userId: string,
+    provider: AuthProvider,
+    providerUserId: string,
+  ): Promise<void>;
 }
 
 @Injectable()
@@ -66,6 +73,46 @@ export class UsersRepository implements IUsersRepository {
     return this.prisma.user.update({
       where: { id: userId },
       data: { trustTier: tier },
+    });
+  }
+
+  markDanVerified(
+    userId: string,
+    verifiedAt: Date,
+    tier: number,
+  ): Promise<UserRecord> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        trustTier: tier,
+        kycStatus: 'verified',
+        kycVerifiedAt: verifiedAt,
+      },
+    });
+  }
+
+  async linkIdentity(
+    userId: string,
+    provider: AuthProvider,
+    providerUserId: string,
+  ): Promise<void> {
+    await this.prisma.authIdentity.upsert({
+      where: {
+        provider_providerUserId: {
+          provider,
+          providerUserId,
+        },
+      },
+      update: {
+        userId,
+        verifiedAt: new Date(),
+      },
+      create: {
+        userId,
+        provider,
+        providerUserId,
+        verifiedAt: new Date(),
+      },
     });
   }
 }

@@ -1,0 +1,6 @@
+{
+  "name": "backend-jest-transformer",
+  "private": true,
+  "type": "commonjs",
+  "main": "index.js"
+}

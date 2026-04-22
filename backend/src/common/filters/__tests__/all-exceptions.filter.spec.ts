@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
 import type { ErrorBody } from '../all-exceptions.filter.js';
 import { AllExceptionsFilter } from '../all-exceptions.filter.js';

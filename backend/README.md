@@ -1,98 +1,117 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
-
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## Setup
 
 ```bash
-$ npm install
+npm install
+npm run build
 ```
 
-## Compile and run the project
+Create env file:
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+cp .env.example .env
 ```
 
-## Run tests
+Local dependencies:
+
+- PostgreSQL / PostGIS
+- Redis
+- MQTT broker
+
+## Common Commands
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm run start:dev
+npm run build
+npm run test -- --runInBand
 ```
 
-## Deployment
+## Local MQTT Loop
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Cabinet байхгүй үед локал broker + simulator ашиглаж MQTT flow-оо шалгана.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+1. Broker ажиллуул.
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm run mqtt:broker
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+2. Simulator ажиллуул.
 
-## Resources
+```bash
+MQTT_URL=mqtt://localhost:1883 \
+SIM_CABINET_ID=cabinet-dev-1 \
+SIM_SLOT_COUNT=8 \
+SIM_OCCUPIED_SLOTS=0,1,2 \
+npm run mqtt:simulator
+```
 
-Check out a few resources that may come in handy when working with NestJS:
+3. Protocol smoke test ажиллуул.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+```bash
+MQTT_URL=mqtt://localhost:1883 \
+SIM_CABINET_ID=cabinet-dev-1 \
+SIM_TEST_SLOT_INDEX=0 \
+npm run mqtt:smoke
+```
 
-## Support
+4. Backend `.env` дээр MQTT тохируул.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+```bash
+MQTT_URL="mqtt://localhost:1883"
+MQTT_ACK_TIMEOUT_MS="60000"
+MQTT_HEARTBEAT_TIMEOUT_MS="90000"
+```
 
-## Stay in touch
+5. Testing station-ийн `mqttDeviceId` нь simulator-ийн `SIM_CABINET_ID`-тай яг ижил байх ёстой.
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+## Real Cabinet Contract
 
-## License
+Backend одоо дараах topic-уудыг ашиглана:
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- `cabinets/{cabinetId}/status`
+- `cabinets/{cabinetId}/slot/{slotIndex}`
+- `cabinets/{cabinetId}/heartbeat`
+- `cabinets/{cabinetId}/cmd/release`
+- `cabinets/{cabinetId}/cmd/lock`
+- `cabinets/{cabinetId}/ack/{commandId}`
+
+Command payload:
+
+```json
+{
+  "commandId": "uuid",
+  "slotId": "db-slot-uuid",
+  "slotIndex": 0,
+  "issuedAt": "2026-04-22T10:00:00.000Z"
+}
+```
+
+ACK payload:
+
+```json
+{
+  "status": "ok",
+  "errorCode": null,
+  "errorMessage": null,
+  "receivedAt": "2026-04-22T10:00:00.000Z"
+}
+```
+
+Slot snapshot payload:
+
+```json
+{
+  "slotIndex": 0,
+  "status": "occupied",
+  "powerBankPresent": true,
+  "seenAt": "2026-04-22T10:00:00.000Z"
+}
+```
+
+Анхаарах зүйл:
+
+- Firmware-ийн `slotIndex` нь DB дээрх `slots.slotIndex`-тай яг таарах ёстой.
+- Heartbeat 90 секундээс их тасарвал cabinet `offline` гэж тооцогдоно.
+- `findNearby` нь MQTT enable үед heartbeat-гүй cabinet-ийг нууж эхэлнэ.

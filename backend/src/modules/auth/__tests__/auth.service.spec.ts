@@ -1,5 +1,10 @@
+import { jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 
@@ -38,6 +43,7 @@ describe('AuthService', () => {
   let usersRepo: jest.Mocked<UsersRepository>;
   let authRepo: jest.Mocked<AuthRepository>;
   let _jwtService: jest.Mocked<JwtService>;
+  let config: jest.Mocked<ConfigService>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -54,15 +60,18 @@ describe('AuthService', () => {
               const cfg: Record<string, string> = {
                 JWT_REFRESH_EXPIRES_IN: '7d',
                 DAN_CLIENT_ID: 'dan-client',
+                DAN_CLIENT_SECRET: 'dan-secret',
                 DAN_CALLBACK_URL: 'https://api.example.mn/auth/dan/callback',
                 DAN_ISSUER_URL: 'https://dan.gov.mn',
                 NATIONAL_ID_HASH_SALT: 'test-salt-16chars',
+                NODE_ENV: 'test',
               };
               return cfg[key];
             }),
             getOrThrow: jest.fn((key: string) => {
               if (key === 'JWT_SECRET')
                 return 'test-secret-32chars-long-enough!';
+              if (key === 'NATIONAL_ID_HASH_SALT') return 'test-salt-16chars';
               throw new Error(`Missing: ${key}`);
             }),
           },
@@ -96,6 +105,8 @@ describe('AuthService', () => {
             findById: jest.fn(),
             create: jest.fn(),
             updateTrustTier: jest.fn(),
+            markDanVerified: jest.fn(),
+            linkIdentity: jest.fn(),
           },
         },
         {
@@ -103,8 +114,10 @@ describe('AuthService', () => {
           useValue: {
             createRefreshToken: jest.fn(),
             findRefreshToken: jest.fn(),
+            findDanVerificationByNationalIdHash: jest.fn(),
             revokeRefreshToken: jest.fn(),
             revokeAllUserTokens: jest.fn(),
+            upsertDanVerification: jest.fn(),
           },
         },
       ],
@@ -116,6 +129,7 @@ describe('AuthService', () => {
     usersRepo = module.get(UsersRepository);
     authRepo = module.get(AuthRepository);
     _jwtService = module.get(JwtService);
+    config = module.get(ConfigService);
   });
 
   // ─── requestOtp ──────────────────────────────────────────────────────────
@@ -162,6 +176,52 @@ describe('AuthService', () => {
       const result = await service.requestOtp('+97699001234');
       expect(result.expiresAt).toBeInstanceOf(Date);
     });
+
+    it('uses fixed OTP fallback in non-production when configured', async () => {
+      config.get.mockImplementation((key: string) => {
+        const cfg: Record<string, string> = {
+          JWT_REFRESH_EXPIRES_IN: '7d',
+          DAN_CLIENT_ID: 'dan-client',
+          DAN_CLIENT_SECRET: 'dan-secret',
+          DAN_CALLBACK_URL: 'https://api.example.mn/auth/dan/callback',
+          DAN_ISSUER_URL: 'https://dan.gov.mn',
+          NATIONAL_ID_HASH_SALT: 'test-salt-16chars',
+          NODE_ENV: 'test',
+          OTP_FIXED_CODE: '123456',
+        };
+        return cfg[key];
+      });
+      redis.get.mockResolvedValue(null);
+      redis.set.mockResolvedValue('OK');
+      sms.sendOtp.mockResolvedValue(undefined);
+
+      await service.requestOtp('+97699001234');
+
+      expect(sms.sendOtp).toHaveBeenCalledWith('+97699001234', '123456');
+    });
+
+    it('continues when SMS send fails but fixed OTP fallback is enabled', async () => {
+      config.get.mockImplementation((key: string) => {
+        const cfg: Record<string, string> = {
+          JWT_REFRESH_EXPIRES_IN: '7d',
+          DAN_CLIENT_ID: 'dan-client',
+          DAN_CLIENT_SECRET: 'dan-secret',
+          DAN_CALLBACK_URL: 'https://api.example.mn/auth/dan/callback',
+          DAN_ISSUER_URL: 'https://dan.gov.mn',
+          NATIONAL_ID_HASH_SALT: 'test-salt-16chars',
+          NODE_ENV: 'test',
+          OTP_FIXED_CODE: '123456',
+        };
+        return cfg[key];
+      });
+      redis.get.mockResolvedValue(null);
+      redis.set.mockResolvedValue('OK');
+      sms.sendOtp.mockRejectedValue(new Error('sms offline'));
+
+      const result = await service.requestOtp('+97699001234');
+
+      expect(result.expiresAt).toBeInstanceOf(Date);
+    });
   });
 
   // ─── verifyOtp ───────────────────────────────────────────────────────────
@@ -178,8 +238,11 @@ describe('AuthService', () => {
       const result = await service.verifyOtp('+97699001234', '654321');
 
       expect(result.accessToken).toBe('access-token');
-      expect(result.refreshToken).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.refreshToken).toMatch(/^app\.[0-9a-f]{64}$/);
       expect(result.user).toEqual(mockUser);
+      expect(_jwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: 'mobile-app' }),
+      );
     });
 
     it('throws OTP_EXPIRED when no Redis entry exists', async () => {
@@ -245,6 +308,38 @@ describe('AuthService', () => {
         UnauthorizedException,
       );
     });
+
+    it('issues admin audience tokens for admin users only', async () => {
+      redis.get.mockResolvedValue(
+        JSON.stringify({ code: '654321', attempts: 0 }),
+      );
+      redis.del.mockResolvedValue(1);
+      usersRepo.findByPhone.mockResolvedValue({ ...mockUser, role: 'admin' });
+      authRepo.createRefreshToken.mockResolvedValue({} as RefreshToken);
+
+      const result = await service.verifyOtp(
+        '+97699001234',
+        '654321',
+        'admin-panel',
+      );
+
+      expect(result.refreshToken).toMatch(/^admin\.[0-9a-f]{64}$/);
+      expect(_jwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: 'admin-panel', role: 'admin' }),
+      );
+    });
+
+    it('rejects admin audience tokens for non-admin users', async () => {
+      redis.get.mockResolvedValue(
+        JSON.stringify({ code: '654321', attempts: 0 }),
+      );
+      redis.del.mockResolvedValue(1);
+      usersRepo.findByPhone.mockResolvedValue(mockUser);
+
+      await expect(
+        service.verifyOtp('+97699001234', '654321', 'admin-panel'),
+      ).rejects.toThrow(ForbiddenException);
+    });
   });
 
   // ─── refresh ─────────────────────────────────────────────────────────────
@@ -253,6 +348,7 @@ describe('AuthService', () => {
     const futureDate = new Date(Date.now() + 86400000);
 
     it('issues new token pair on valid refresh token', async () => {
+      const token = `app.${'a'.repeat(64)}`;
       const record: RefreshToken = {
         id: 'rt-id',
         userId: 'user-uuid-1',
@@ -266,14 +362,20 @@ describe('AuthService', () => {
       usersRepo.findById.mockResolvedValue(mockUser);
       authRepo.createRefreshToken.mockResolvedValue({} as RefreshToken);
 
-      const result = await service.refresh('valid-token');
+      const result = await service.refresh(token);
       expect(result.accessToken).toBe('access-token');
+      expect(authRepo.findRefreshToken).toHaveBeenCalledWith(
+        expect.any(String),
+      );
+      expect(_jwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ aud: 'mobile-app' }),
+      );
     });
 
     it('throws INVALID_REFRESH_TOKEN when not found', async () => {
       authRepo.findRefreshToken.mockResolvedValue(null);
 
-      await expect(service.refresh('bad-token')).rejects.toThrow(
+      await expect(service.refresh(`app.${'b'.repeat(64)}`)).rejects.toThrow(
         UnauthorizedException,
       );
     });
@@ -288,7 +390,7 @@ describe('AuthService', () => {
         createdAt: new Date(),
       });
 
-      await expect(service.refresh('revoked-token')).rejects.toThrow(
+      await expect(service.refresh(`app.${'c'.repeat(64)}`)).rejects.toThrow(
         UnauthorizedException,
       );
     });
@@ -303,7 +405,13 @@ describe('AuthService', () => {
         createdAt: new Date(),
       });
 
-      await expect(service.refresh('expired-token')).rejects.toThrow(
+      await expect(service.refresh(`app.${'d'.repeat(64)}`)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('rejects refresh tokens with invalid audience prefix', async () => {
+      await expect(service.refresh('weird.token')).rejects.toThrow(
         UnauthorizedException,
       );
     });
@@ -392,6 +500,125 @@ describe('AuthService', () => {
         }),
       );
       expect(result.user).toEqual(mockUser);
+    });
+
+    it('links Google identity when existing user is found by email', async () => {
+      usersRepo.findByIdentity.mockResolvedValue(null);
+      usersRepo.findByEmail.mockResolvedValue(mockUser);
+      authRepo.createRefreshToken.mockResolvedValue({} as RefreshToken);
+
+      const result = await service.googleLogin({
+        sub: 'g-sub-existing',
+        email: 'test@gmail.com',
+        name: 'Test User',
+        emailVerified: true,
+      });
+
+      expect(usersRepo.linkIdentity).toHaveBeenCalledWith(
+        mockUser.id,
+        'google',
+        'g-sub-existing',
+      );
+      expect(result.user).toEqual(mockUser);
+    });
+  });
+
+  // ─── completeDan ────────────────────────────────────────────────────────
+
+  describe('completeDan', () => {
+    const fetchMock = jest.fn();
+
+    beforeEach(() => {
+      jest.spyOn(global, 'fetch').mockImplementation(fetchMock as typeof fetch);
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+      jest.restoreAllMocks();
+    });
+
+    it('stores encrypted DAN data and marks user as verified', async () => {
+      const now = new Date('2026-04-22T00:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(now);
+
+      redis.getdel.mockResolvedValue('user-uuid-1');
+      usersRepo.findById.mockResolvedValue(mockUser);
+      authRepo.findDanVerificationByNationalIdHash.mockResolvedValue(null);
+      authRepo.upsertDanVerification.mockResolvedValue(undefined);
+      usersRepo.markDanVerified.mockResolvedValue({
+        ...mockUser,
+        trustTier: 2,
+        kycStatus: 'verified',
+        kycVerifiedAt: now,
+      });
+
+      fetchMock
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ access_token: 'dan-access-token' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              sub: 'dan-sub-1',
+              national_id: 'AB12345678',
+              given_name: 'Bat',
+              family_name: 'Dorj',
+              birthdate: '1990-01-01',
+              gender: 'male',
+            }),
+        });
+
+      const result = await service.completeDan('auth-code', 'state-123');
+
+      expect(authRepo.upsertDanVerification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-uuid-1',
+          nationalIdHash: 'hash-abc123',
+          givenName: 'enc:Bat',
+          familyName: 'enc:Dorj',
+          birthdate: 'enc:1990-01-01',
+          gender: 'enc:male',
+          verifiedAt: now,
+        }),
+      );
+      expect(usersRepo.markDanVerified).toHaveBeenCalledWith(
+        'user-uuid-1',
+        now,
+        2,
+      );
+      expect(result.user.trustTier).toBe(2);
+
+      jest.useRealTimers();
+    });
+
+    it('rejects DAN verification already linked to another user', async () => {
+      redis.getdel.mockResolvedValue('user-uuid-1');
+      usersRepo.findById.mockResolvedValue(mockUser);
+      authRepo.findDanVerificationByNationalIdHash.mockResolvedValue({
+        userId: 'other-user',
+      });
+
+      fetchMock
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ access_token: 'dan-access-token' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              sub: 'dan-sub-1',
+              national_id: 'AB12345678',
+              given_name: 'Bat',
+              family_name: 'Dorj',
+            }),
+        });
+
+      await expect(
+        service.completeDan('auth-code', 'state-123'),
+      ).rejects.toThrow('Таны бүртгэл аль хэдийн баталгаажсан');
     });
   });
 });

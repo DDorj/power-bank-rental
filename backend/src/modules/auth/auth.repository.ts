@@ -21,6 +21,9 @@ export interface IAuthRepository {
     expiresAt: Date,
   ): Promise<RefreshToken>;
   findRefreshToken(tokenHash: string): Promise<RefreshToken | null>;
+  findDanVerificationByNationalIdHash(
+    nationalIdHash: string,
+  ): Promise<{ userId: string } | null>;
   revokeRefreshToken(id: string): Promise<void>;
   revokeAllUserTokens(userId: string): Promise<void>;
   upsertDanVerification(params: UpsertDanVerificationParams): Promise<void>;
@@ -43,6 +46,15 @@ export class AuthRepository implements IAuthRepository {
   // M-9: tokenHash has a unique index — findUnique is correct here
   findRefreshToken(tokenHash: string): Promise<RefreshToken | null> {
     return this.prisma.refreshToken.findUnique({ where: { tokenHash } });
+  }
+
+  findDanVerificationByNationalIdHash(
+    nationalIdHash: string,
+  ): Promise<{ userId: string } | null> {
+    return this.prisma.danVerification.findFirst({
+      where: { nationalIdHash },
+      select: { userId: true },
+    });
   }
 
   revokeRefreshToken(id: string): Promise<void> {

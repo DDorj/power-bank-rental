@@ -8,19 +8,24 @@
   "type": "module",
   "scripts": {
     "build": "./scripts/run-node.sh ./node_modules/@nestjs/cli/bin/nest.js build",
+    "db:seed": "./scripts/run-node.sh prisma/seed.js",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "predb:seed": "npm run build",
     "start": "./scripts/run-node.sh ./node_modules/@nestjs/cli/bin/nest.js start --exec ./scripts/run-node.sh",
     "start:dev": "./scripts/run-node.sh ./node_modules/@nestjs/cli/bin/nest.js start --watch --exec ./scripts/run-node.sh",
     "start:debug": "./scripts/run-node.sh ./node_modules/@nestjs/cli/bin/nest.js start --debug --watch --exec ./scripts/run-node.sh",
     "start:prod": "./scripts/run-node.sh dist/src/main.js",
+    "mqtt:broker": "./scripts/run-node.sh ./test/mocks/mqtt-broker.mjs",
+    "mqtt:simulator": "./scripts/run-node.sh ./test/mocks/cabinet-simulator.mjs",
+    "mqtt:smoke": "./scripts/run-node.sh ./test/mocks/mqtt-smoke.mjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json",
     "prepare": "cd .. && husky backend/.husky",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
-    "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
-    "test:cov": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
-    "test:debug": "NODE_OPTIONS=--experimental-vm-modules node --inspect-brk node_modules/.bin/jest --runInBand",
-    "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json"
+    "test": "./scripts/run-node.sh --experimental-vm-modules ./node_modules/jest/bin/jest.js",
+    "test:watch": "./scripts/run-node.sh --experimental-vm-modules ./node_modules/jest/bin/jest.js --watch",
+    "test:cov": "./scripts/run-node.sh --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage",
+    "test:debug": "./scripts/run-node.sh --experimental-vm-modules --inspect-brk ./node_modules/jest/bin/jest.js --runInBand",
+    "test:e2e": "./scripts/run-node.sh --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.config.cjs"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
@@ -46,6 +51,7 @@
     "class-validator": "^0.15.1",
     "helmet": "^8.1.0",
     "ioredis": "^5.10.1",
+    "mqtt": "^5.15.1",
     "nestjs-pino": "^4.6.1",
     "openid-client": "^5.7.1",
     "passport": "^0.7.0",
@@ -72,6 +78,7 @@
     "@types/passport-jwt": "^4.0.1",
     "@types/pg": "^8.20.0",
     "@types/supertest": "^6.0.2",
+    "aedes": "^1.0.2",
     "dotenv": "^17.4.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
@@ -90,32 +97,7 @@
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0"
   },
-  "jest": {
-    "moduleFileExtensions": [
-      "js",
-      "json",
-      "ts"
-    ],
-    "rootDir": "src",
-    "testRegex": ".*\\.spec\\.ts$",
-    "extensionsToTreatAsEsm": [
-      ".ts"
-    ],
-    "transform": {
-      "^.+\\.(t|j)s$": [
-        "ts-jest",
-        {
-          "useESM": true
-        }
-      ]
-    },
-    "moduleNameMapper": {
-      "^(\\.{1,2}/.*)\\.js$": "$1"
-    },
-    "collectCoverageFrom": [
-      "**/*.(t|j)s"
-    ],
-    "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+  "prisma": {
+    "seed": "npm run db:seed"
   }
 }

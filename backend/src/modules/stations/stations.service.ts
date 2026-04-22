@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { StationsRepository } from './stations.repository.js';
 import { buildAppError } from '../../common/errors/app-errors.js';
+import type { EnvConfig } from '../../config/env.schema.js';
 import type {
   StationNearbyRow,
   StationDetail,
@@ -11,10 +13,28 @@ import type {
 
 @Injectable()
 export class StationsService {
-  constructor(private readonly repo: StationsRepository) {}
+  constructor(
+    private readonly repo: StationsRepository,
+    private readonly config: ConfigService<EnvConfig, true>,
+  ) {}
 
-  findNearby(params: NearbyParams): Promise<StationNearbyRow[]> {
-    return this.repo.findNearby(params);
+  async findNearby(params: NearbyParams): Promise<StationNearbyRow[]> {
+    const stations = await this.repo.findNearby(params);
+    const mqttUrl = this.config.get('MQTT_URL', { infer: true });
+    if (!mqttUrl) {
+      return stations;
+    }
+
+    const heartbeatTimeoutMs =
+      this.config.get('MQTT_HEARTBEAT_TIMEOUT_MS', { infer: true }) ?? 90_000;
+    const cutoff = Date.now() - heartbeatTimeoutMs;
+
+    return stations.filter(
+      (station) =>
+        station.mqttDeviceId !== null &&
+        station.lastHeartbeatAt !== null &&
+        station.lastHeartbeatAt.getTime() >= cutoff,
+    );
   }
 
   async findById(id: string): Promise<StationDetail> {
