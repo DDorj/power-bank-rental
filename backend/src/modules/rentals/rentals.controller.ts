@@ -23,6 +23,12 @@ import {
   RentalHistoryResponseDto,
   RentalResponseDto,
 } from './dto/rental-response.dto.js';
+import { AutoReturnRentalDto } from './dto/auto-return-rental.dto.js';
+import { AutoStartRentalDto } from './dto/auto-start-rental.dto.js';
+import {
+  ReturnStationOptionResponseDto,
+  ReturnStationsQueryDto,
+} from './dto/return-stations.dto.js';
 import { StartRentalDto } from './dto/start-rental.dto.js';
 import { ReturnRentalDto } from './dto/return-rental.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
@@ -51,6 +57,20 @@ export class RentalsController {
     });
   }
 
+  @ApiBody({ type: AutoStartRentalDto })
+  @ApiSuccessResponse({
+    status: HttpStatus.CREATED,
+    type: RentalResponseDto,
+  })
+  @Post('start/auto-select')
+  @HttpCode(HttpStatus.CREATED)
+  startWithAutoSelect(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: AutoStartRentalDto,
+  ) {
+    return this.service.startWithAutoSelect(user.id, dto.stationId);
+  }
+
   @ApiParam({ name: 'id', type: String, format: 'uuid' })
   @ApiBody({ type: ReturnRentalDto })
   @ApiSuccessResponse({
@@ -69,6 +89,42 @@ export class RentalsController {
       userId: user.id,
       stationId: dto.stationId,
       slotId: dto.slotId,
+    });
+  }
+
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiBody({ type: AutoReturnRentalDto })
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: RentalResponseDto,
+  })
+  @Post(':id/return/auto-select')
+  @HttpCode(HttpStatus.OK)
+  returnWithAutoSelect(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AutoReturnRentalDto,
+  ) {
+    return this.service.returnWithAutoSelect(id, user.id, dto.stationId);
+  }
+
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: ReturnStationOptionResponseDto,
+    isArray: true,
+  })
+  @Get(':id/return-stations')
+  getReturnStations(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() dto: ReturnStationsQueryDto,
+  ) {
+    return this.service.getReturnStations(id, user.id, {
+      lat: dto.lat,
+      lng: dto.lng,
+      radiusKm: dto.radiusKm,
+      limit: dto.limit,
     });
   }
 

@@ -6,6 +6,7 @@ import type { EnvConfig } from '../../config/env.schema.js';
 import type {
   StationNearbyRow,
   StationDetail,
+  AdminStationListRow,
   CreateStationParams,
   UpdateStationParams,
   NearbyParams,
@@ -20,21 +21,11 @@ export class StationsService {
 
   async findNearby(params: NearbyParams): Promise<StationNearbyRow[]> {
     const stations = await this.repo.findNearby(params);
-    const mqttUrl = this.config.get('MQTT_URL', { infer: true });
-    if (!mqttUrl) {
+    if (!this.isMqttFilteringEnabled()) {
       return stations;
     }
 
-    const heartbeatTimeoutMs =
-      this.config.get('MQTT_HEARTBEAT_TIMEOUT_MS', { infer: true }) ?? 90_000;
-    const cutoff = Date.now() - heartbeatTimeoutMs;
-
-    return stations.filter(
-      (station) =>
-        station.mqttDeviceId !== null &&
-        station.lastHeartbeatAt !== null &&
-        station.lastHeartbeatAt.getTime() >= cutoff,
-    );
+    return stations.filter((station) => this.isOnline(station));
   }
 
   async findById(id: string): Promise<StationDetail> {
@@ -42,7 +33,25 @@ export class StationsService {
     if (!station) {
       throw new NotFoundException(buildAppError('STATION_NOT_FOUND'));
     }
+    station.online = this.isOnline(station);
     return station;
+  }
+
+  async findByMqttDeviceId(mqttDeviceId: string): Promise<StationDetail> {
+    const station = await this.repo.findByMqttDeviceId(mqttDeviceId);
+    if (!station) {
+      throw new NotFoundException(buildAppError('STATION_NOT_FOUND'));
+    }
+    station.online = this.isOnline(station);
+    return station;
+  }
+
+  async findAdminList(): Promise<AdminStationListRow[]> {
+    const stations = await this.repo.findAdminList();
+    return stations.map((station) => ({
+      ...station,
+      online: this.isOnline(station),
+    }));
   }
 
   create(params: CreateStationParams) {
@@ -64,5 +73,28 @@ export class StationsService {
     if (!exists) {
       throw new NotFoundException(buildAppError('STATION_NOT_FOUND'));
     }
+  }
+
+  private isOnline(station: {
+    mqttDeviceId: string | null;
+    lastHeartbeatAt: Date | null;
+  }): boolean {
+    if (!this.isMqttFilteringEnabled()) {
+      return false;
+    }
+
+    const heartbeatTimeoutMs =
+      this.config.get('MQTT_HEARTBEAT_TIMEOUT_MS', { infer: true }) ?? 90_000;
+    const cutoff = Date.now() - heartbeatTimeoutMs;
+
+    return (
+      station.mqttDeviceId !== null &&
+      station.lastHeartbeatAt !== null &&
+      station.lastHeartbeatAt.getTime() >= cutoff
+    );
+  }
+
+  private isMqttFilteringEnabled(): boolean {
+    return Boolean(this.config.get('MQTT_URL', { infer: true }));
   }
 }

@@ -1,5 +1,9 @@
 import { jest } from '@jest/globals';
-import { BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 
@@ -10,8 +14,10 @@ jest.mock('../../../common/prisma/prisma.service', () => ({
 import { RedisService } from '../../../common/redis/redis.service.js';
 import { WalletService } from '../../wallet/wallet.service.js';
 import { BonumProvider } from '../bonum/bonum.provider.js';
+import type { CreatePaymentInvoiceParams } from '../payment-provider.interface.js';
 import { PaymentsRepository } from '../payments.repository.js';
 import { PaymentsService } from '../payments.service.js';
+import type { BonumInvoiceRecord } from '../payments.types.js';
 
 const mockInvoice: BonumInvoiceRecord = {
   id: 'invoice-uuid-1',
@@ -107,16 +113,17 @@ describe('PaymentsService', () => {
     });
     repo.createBonumInvoice.mockResolvedValue(mockInvoice);
 
-    expect(bonum.createInvoice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        amount: 5000,
-        transactionId: expect.stringMatching(/^topup-/),
-        callbackUrl: 'https://api.example.mn/api/v1/payments/bonum/callback',
-      }),
-    );
-    await expect(
-      service.createWalletTopupInvoice('user-uuid-1', 5000),
-    ).resolves.toEqual(mockInvoice);
+    const result = await service.createWalletTopupInvoice('user-uuid-1', 5000);
+    const createInvoiceArgs: CreatePaymentInvoiceParams | undefined =
+      bonum.createInvoice.mock.calls[0]?.[0];
+
+    expect(result).toEqual(mockInvoice);
+    expect(createInvoiceArgs).toBeDefined();
+    expect(createInvoiceArgs).toMatchObject({
+      amount: 5000,
+      callbackUrl: 'https://api.example.mn/api/v1/payments/bonum/callback',
+    });
+    expect(createInvoiceArgs?.transactionId).toMatch(/^topup-/);
   });
 
   it('rejects webhook when checksum is invalid', async () => {

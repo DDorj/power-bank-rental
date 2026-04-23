@@ -1,5 +1,6 @@
 import { jest } from '@jest/globals';
 import { ForbiddenException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 
 jest.mock('../../../common/prisma/prisma.service', () => ({
@@ -99,6 +100,10 @@ describe('RentalsService', () => {
             $transaction: jest.fn(),
             findSlotWithPowerBankInTx: jest.fn(),
             findSlotById: jest.fn(),
+            findSlotWithPowerBank: jest.fn(),
+            findFirstRentableSlotByStation: jest.fn(),
+            findFirstEmptySlotByStation: jest.fn(),
+            findNearbyReturnStations: jest.fn(),
           },
         },
         {
@@ -107,7 +112,7 @@ describe('RentalsService', () => {
         },
         {
           provide: WalletService,
-          useValue: { applyInExistingTx: jest.fn() },
+          useValue: { applyInExistingTx: jest.fn(), getOrCreate: jest.fn() },
         },
         {
           provide: CabinetCommandService,
@@ -116,6 +121,16 @@ describe('RentalsService', () => {
             releaseSlot: jest.fn(),
             lockSlot: jest.fn(),
             getHealthStatus: jest.fn(),
+          },
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string) => {
+              if (key === 'MQTT_URL') return 'mqtt://localhost:1883';
+              if (key === 'MQTT_HEARTBEAT_TIMEOUT_MS') return 90_000;
+              return undefined;
+            }),
           },
         },
       ],
@@ -301,7 +316,9 @@ describe('RentalsService', () => {
       repo.findActiveByUser.mockResolvedValue(null);
       repo.getDefaultPricing.mockResolvedValue(mockPricing);
       repo.findSlotWithPowerBankInTx.mockResolvedValue(mockSlotWithPowerBank);
-      repo.$transaction.mockImplementation(async (fn) => fn(makeMockTx() as never));
+      repo.$transaction.mockImplementation(async (fn) =>
+        fn(makeMockTx() as never),
+      );
       walletService.applyInExistingTx.mockResolvedValue({} as never);
       cabinetCommands.releaseSlot.mockRejectedValue(new Error('ack timeout'));
 
@@ -332,6 +349,39 @@ describe('RentalsService', () => {
         }),
       );
       expect(repo.createRental).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('startWithAutoSelect', () => {
+    it('selects first rentable slot and starts rental', async () => {
+      repo.findFirstRentableSlotByStation.mockResolvedValue(
+        mockSlotWithPowerBank,
+      );
+      repo.findActiveByUser.mockResolvedValue(null);
+      repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      repo.findSlotWithPowerBankInTx.mockResolvedValue(mockSlotWithPowerBank);
+      const mockTx = makeMockTx();
+      repo.$transaction.mockImplementation(async (fn) => fn(mockTx as never));
+      walletService.applyInExistingTx.mockResolvedValue({} as never);
+      repo.createRental.mockResolvedValue(mockRental);
+
+      const result = await service.startWithAutoSelect(
+        'user-uuid-1',
+        'station-uuid-1',
+      );
+
+      expect(repo.findFirstRentableSlotByStation).toHaveBeenCalledWith(
+        'station-uuid-1',
+      );
+      expect(result.id).toBe('rental-uuid-1');
+    });
+
+    it('throws SlotEmptyException when no rentable slot exists', async () => {
+      repo.findFirstRentableSlotByStation.mockResolvedValue(null);
+
+      await expect(
+        service.startWithAutoSelect('user-uuid-1', 'station-uuid-1'),
+      ).rejects.toThrow(SlotEmptyException);
     });
   });
 
@@ -380,10 +430,10 @@ describe('RentalsService', () => {
       expect(cabinetCommands.requireOnlineCabinet).toHaveBeenCalledWith(
         'station-uuid-2',
       );
-      expect(cabinetCommands.lockSlot).toHaveBeenCalledWith(
-        'cabinet-uuid-1',
-        { slotId: 'return-slot-uuid-1', slotIndex: 1 },
-      );
+      expect(cabinetCommands.lockSlot).toHaveBeenCalledWith('cabinet-uuid-1', {
+        slotId: 'return-slot-uuid-1',
+        slotIndex: 1,
+      });
       expect(walletService.applyInExistingTx).toHaveBeenNthCalledWith(
         1,
         mockTx,
@@ -449,6 +499,89 @@ describe('RentalsService', () => {
           slotId: 'return-slot-uuid-1',
         }),
       ).rejects.toThrow(SlotOccupiedException);
+    });
+  });
+
+  describe('returnWithAutoSelect', () => {
+    it('selects first empty slot and returns rental', async () => {
+      const emptySlot = {
+        id: 'return-slot-uuid-1',
+        stationId: 'station-uuid-2',
+        slotIndex: 1,
+        status: 'empty' as const,
+        powerBankId: null,
+        updatedAt: new Date(),
+      };
+      repo.findFirstEmptySlotByStation.mockResolvedValue(emptySlot);
+      repo.findByIdAndUser.mockResolvedValue(mockRental);
+      repo.findSlotById.mockResolvedValue(emptySlot);
+      repo.getDefaultPricing.mockResolvedValue(mockPricing);
+      const mockTx = makeMockTx();
+      repo.$transaction.mockImplementation(async (fn) => fn(mockTx as never));
+      walletService.applyInExistingTx.mockResolvedValue({} as never);
+      repo.completeRental.mockResolvedValue({
+        ...mockRental,
+        status: 'completed',
+        endStationId: 'station-uuid-2',
+        endSlotId: 'return-slot-uuid-1',
+      });
+
+      const result = await service.returnWithAutoSelect(
+        'rental-uuid-1',
+        'user-uuid-1',
+        'station-uuid-2',
+      );
+
+      expect(repo.findFirstEmptySlotByStation).toHaveBeenCalledWith(
+        'station-uuid-2',
+      );
+      expect(result.status).toBe('completed');
+    });
+
+    it('throws SlotOccupiedException when no empty slot exists', async () => {
+      repo.findFirstEmptySlotByStation.mockResolvedValue(null);
+
+      await expect(
+        service.returnWithAutoSelect(
+          'rental-uuid-1',
+          'user-uuid-1',
+          'station-uuid-2',
+        ),
+      ).rejects.toThrow(SlotOccupiedException);
+    });
+  });
+
+  describe('getReturnStations', () => {
+    it('returns nearby return-capable stations for active rental', async () => {
+      repo.findByIdAndUser.mockResolvedValue(mockRental);
+      repo.findNearbyReturnStations.mockResolvedValue([
+        {
+          id: 'station-uuid-2',
+          name: 'Shangri-La Mall',
+          address: 'Olympic street 19A',
+          status: 'active',
+          mqttDeviceId: 'cabinet-001',
+          lastHeartbeatAt: new Date(),
+          lat: 47.9136,
+          lng: 106.9155,
+          distanceMeters: 120,
+          emptySlots: 2,
+        },
+      ]);
+
+      const result = await service.getReturnStations(
+        'rental-uuid-1',
+        'user-uuid-1',
+        {
+          lat: 47.91,
+          lng: 106.91,
+          radiusKm: 5,
+          limit: 10,
+        },
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0]?.supportsReturn).toBe(true);
     });
   });
 

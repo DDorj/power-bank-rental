@@ -1,9 +1,26 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service.js';
 import type { PrismaClient } from '../../../generated/prisma/client.js';
-import type { RentalRecord, PricingRuleRecord } from './rentals.types.js';
+import type {
+  RentalRecord,
+  PricingRuleRecord,
+  ReturnStationOption,
+} from './rentals.types.js';
 
 type Tx = Parameters<Parameters<PrismaClient['$transaction']>[0]>[0];
+
+type RawReturnStationRow = {
+  id: string;
+  name: string;
+  address: string;
+  status: string;
+  mqtt_device_id: string | null;
+  last_heartbeat_at: Date | null;
+  lat: number;
+  lng: number;
+  distance_meters: number;
+  empty_slots: bigint;
+};
 
 export interface SlotRow {
   id: string;
@@ -79,6 +96,94 @@ export class RentalsRepository {
     return this.prisma.slot.findUnique({
       where: { id: slotId },
     });
+  }
+
+  findSlotWithPowerBank(slotId: string): Promise<SlotWithPowerBank | null> {
+    return this.prisma.slot.findUnique({
+      where: { id: slotId },
+      include: { powerBank: true },
+    });
+  }
+
+  findFirstRentableSlotByStation(
+    stationId: string,
+  ): Promise<SlotWithPowerBank | null> {
+    return this.prisma.slot.findFirst({
+      where: {
+        stationId,
+        powerBank: {
+          is: {
+            status: 'idle',
+          },
+        },
+      },
+      include: { powerBank: true },
+      orderBy: { slotIndex: 'asc' },
+    });
+  }
+
+  findFirstEmptySlotByStation(stationId: string): Promise<SlotRow | null> {
+    return this.prisma.slot.findFirst({
+      where: {
+        stationId,
+        status: 'empty',
+        powerBankId: null,
+      },
+      orderBy: { slotIndex: 'asc' },
+    });
+  }
+
+  async findNearbyReturnStations(params: {
+    lat: number;
+    lng: number;
+    radiusKm: number;
+    limit: number;
+  }): Promise<Omit<ReturnStationOption, 'online' | 'supportsReturn'>[]> {
+    const radiusMeters = params.radiusKm * 1000;
+
+    const rows = await this.prisma.$queryRaw<RawReturnStationRow[]>`
+      SELECT
+        s.id,
+        s.name,
+        s.address,
+        s.status,
+        s.mqtt_device_id,
+        s.last_heartbeat_at,
+        ST_Y(s.location::geometry) AS lat,
+        ST_X(s.location::geometry) AS lng,
+        ST_Distance(
+          s.location::geography,
+          ST_SetSRID(ST_MakePoint(${params.lng}, ${params.lat}), 4326)::geography
+        ) AS distance_meters,
+        COUNT(sl.id) FILTER (
+          WHERE sl.status = 'empty' AND sl.power_bank_id IS NULL
+        ) AS empty_slots
+      FROM stations s
+      LEFT JOIN slots sl ON sl.station_id = s.id
+      WHERE
+        s.status = 'active'
+        AND ST_DWithin(
+          s.location::geography,
+          ST_SetSRID(ST_MakePoint(${params.lng}, ${params.lat}), 4326)::geography,
+          ${radiusMeters}
+        )
+      GROUP BY s.id
+      ORDER BY distance_meters ASC
+      LIMIT ${params.limit}
+    `;
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      address: row.address,
+      status: row.status as ReturnStationOption['status'],
+      mqttDeviceId: row.mqtt_device_id,
+      lastHeartbeatAt: row.last_heartbeat_at,
+      lat: Number(row.lat),
+      lng: Number(row.lng),
+      distanceMeters: Number(row.distance_meters),
+      emptySlots: Number(row.empty_slots),
+    }));
   }
 
   createRental(

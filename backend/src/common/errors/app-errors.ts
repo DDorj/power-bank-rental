@@ -176,6 +176,10 @@ export const APP_ERRORS = {
     code: 'POWER_BANK_STATE_MISMATCH',
     message: 'Power bank төлөв тохирохгүй байна',
   },
+  POWER_BANK_NOT_FOUND: {
+    code: 'POWER_BANK_NOT_FOUND',
+    message: 'Power bank олдсонгүй',
+  },
 } as const satisfies Record<string, AppErrorBody>;
 
 export type AppErrorKey = keyof typeof APP_ERRORS;

@@ -1,5 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { RedisService } from '../../common/redis/redis.service.js';
+import type { EnvConfig } from '../../config/env.schema.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import { RentalsRepository } from './rentals.repository.js';
 import { CabinetCommandService } from '../iot/cabinet-command.service.js';
@@ -17,6 +19,8 @@ import type {
   StartRentalParams,
   ReturnRentalParams,
   RentalCostResult,
+  StartRentalPreview,
+  ReturnStationOption,
 } from './rentals.types.js';
 
 const RENTAL_LOCK_TTL_MS = 10_000;
@@ -30,6 +34,7 @@ export class RentalsService {
     private readonly redis: RedisService,
     private readonly walletService: WalletService,
     private readonly cabinetCommands: CabinetCommandService,
+    private readonly config: ConfigService<EnvConfig, true>,
   ) {}
 
   async start(params: StartRentalParams): Promise<RentalRecord> {
@@ -113,7 +118,10 @@ export class RentalsService {
 
               if (!slot || slot.stationId !== params.stationId)
                 throw new SlotNotFoundException();
-              if (!slot.powerBank || slot.powerBank.id !== prepared.powerBankId) {
+              if (
+                !slot.powerBank ||
+                slot.powerBank.id !== prepared.powerBankId
+              ) {
                 throw new SlotEmptyException();
               }
               if (slot.powerBank.status !== 'idle') {
@@ -156,6 +164,22 @@ export class RentalsService {
     } finally {
       await releaseRental();
     }
+  }
+
+  async startWithAutoSelect(
+    userId: string,
+    stationId: string,
+  ): Promise<RentalRecord> {
+    const slot = await this.repo.findFirstRentableSlotByStation(stationId);
+    if (!slot || !slot.powerBank) {
+      throw new SlotEmptyException();
+    }
+
+    return this.start({
+      userId,
+      stationId,
+      slotId: slot.id,
+    });
   }
 
   async return(params: ReturnRentalParams): Promise<RentalRecord> {
@@ -260,6 +284,22 @@ export class RentalsService {
     }
   }
 
+  async returnWithAutoSelect(
+    rentalId: string,
+    userId: string,
+    stationId: string,
+  ): Promise<RentalRecord> {
+    const slot = await this.repo.findFirstEmptySlotByStation(stationId);
+    if (!slot) throw new SlotOccupiedException();
+
+    return this.return({
+      rentalId,
+      userId,
+      stationId,
+      slotId: slot.id,
+    });
+  }
+
   getActive(userId: string): Promise<RentalRecord | null> {
     return this.repo.findActiveByUser(userId);
   }
@@ -275,6 +315,72 @@ export class RentalsService {
       this.repo.countByUser(userId),
     ]);
     return { data, total };
+  }
+
+  async getReturnStations(
+    rentalId: string,
+    userId: string,
+    params: {
+      lat: number;
+      lng: number;
+      radiusKm: number;
+      limit: number;
+    },
+  ): Promise<ReturnStationOption[]> {
+    const rental = await this.repo.findByIdAndUser(rentalId, userId);
+    if (!rental) throw new RentalNotFoundException();
+    if (rental.status !== 'active') {
+      throw new ForbiddenException({
+        code: 'RENTAL_NOT_ACTIVE',
+        message: 'Түрээс идэвхтэй биш байна',
+      });
+    }
+
+    const stations = await this.repo.findNearbyReturnStations(params);
+    return stations.map((station) => ({
+      ...station,
+      online: this.isStationOnline(station),
+      supportsReturn: station.emptySlots > 0,
+    }));
+  }
+
+  async previewStart(
+    userId: string,
+    stationId: string,
+    slotId: string,
+  ): Promise<StartRentalPreview> {
+    const [activeRental, pricing, slot, wallet] = await Promise.all([
+      this.repo.findActiveByUser(userId),
+      this.repo.getDefaultPricing(),
+      this.repo.findSlotWithPowerBank(slotId),
+      this.walletService.getOrCreate(userId),
+    ]);
+
+    if (!pricing) throw new NoPricingRuleException();
+    if (!slot || slot.stationId !== stationId)
+      throw new SlotNotFoundException();
+    if (!slot.powerBank) throw new SlotEmptyException();
+    if (slot.powerBank.status !== 'idle') throw new PowerBankNotIdleException();
+
+    const walletAvailableBalance = wallet.availableBalance;
+    const sufficientBalance = walletAvailableBalance >= pricing.depositAmount;
+    const hasActiveRental = activeRental !== null;
+
+    return {
+      stationId,
+      slotId: slot.id,
+      slotIndex: slot.slotIndex,
+      powerBankId: slot.powerBank.id,
+      powerBankSerialNumber: slot.powerBank.serialNumber,
+      powerBankChargeLevel: slot.powerBank.chargeLevel,
+      depositAmount: pricing.depositAmount,
+      ratePerHour: pricing.ratePerHour,
+      dailyMax: pricing.dailyMax,
+      walletAvailableBalance,
+      sufficientBalance,
+      hasActiveRental,
+      canStartRental: sufficientBalance && !hasActiveRental,
+    };
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -309,5 +415,25 @@ export class RentalsService {
         description,
       });
     });
+  }
+
+  private isStationOnline(station: {
+    mqttDeviceId: string | null;
+    lastHeartbeatAt: Date | null;
+  }): boolean {
+    const mqttUrl = this.config.get('MQTT_URL', { infer: true });
+    if (!mqttUrl) {
+      return false;
+    }
+
+    const heartbeatTimeoutMs =
+      this.config.get('MQTT_HEARTBEAT_TIMEOUT_MS', { infer: true }) ?? 90_000;
+    const cutoff = Date.now() - heartbeatTimeoutMs;
+
+    return (
+      station.mqttDeviceId !== null &&
+      station.lastHeartbeatAt !== null &&
+      station.lastHeartbeatAt.getTime() >= cutoff
+    );
   }
 }

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
@@ -26,7 +27,10 @@ import { RequireAudience } from '../../common/decorators/require-audience.decora
 import { StationsService } from './stations.service.js';
 import { CreateStationDto } from './dto/create-station.dto.js';
 import { UpdateStationDto } from './dto/update-station.dto.js';
-import { StationDetailResponseDto } from './dto/station-response.dto.js';
+import {
+  AdminStationListResponseDto,
+  StationDetailResponseDto,
+} from './dto/station-response.dto.js';
 import { TOKEN_AUDIENCES } from '../../common/auth/token-audience.js';
 
 @ApiTags('Admin Stations')
@@ -37,6 +41,16 @@ import { TOKEN_AUDIENCES } from '../../common/auth/token-audience.js';
 @Controller('admin/stations')
 export class AdminStationsController {
   constructor(private readonly service: StationsService) {}
+
+  @ApiSuccessResponse({
+    status: HttpStatus.OK,
+    type: AdminStationListResponseDto,
+    isArray: true,
+  })
+  @Get()
+  list() {
+    return this.service.findAdminList();
+  }
 
   @ApiBody({ type: CreateStationDto })
   @ApiSuccessResponse({

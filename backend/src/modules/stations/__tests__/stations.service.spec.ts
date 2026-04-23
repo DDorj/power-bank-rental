@@ -9,7 +9,11 @@ jest.mock('../../../common/prisma/prisma.service', () => ({
 
 import { StationsService } from '../stations.service.js';
 import { StationsRepository } from '../stations.repository.js';
-import type { StationNearbyRow, StationDetail } from '../stations.types.js';
+import type {
+  StationNearbyRow,
+  StationDetail,
+  AdminStationListRow,
+} from '../stations.types.js';
 
 const mockNearby: StationNearbyRow[] = [
   {
@@ -31,6 +35,16 @@ const mockNearby: StationNearbyRow[] = [
 
 const mockDetail: StationDetail = {
   ...mockNearby[0]!,
+  occupiedSlots: 0,
+  online: false,
+  supportsReturn: true,
+  inventorySummary: {
+    totalPowerBanks: 0,
+    availableCount: 0,
+    chargingCount: 0,
+    rentedCount: 0,
+    faultyCount: 0,
+  },
   slots: [
     {
       id: 'slot-uuid-1',
@@ -43,6 +57,24 @@ const mockDetail: StationDetail = {
     },
   ],
 };
+
+const mockAdminList: Omit<AdminStationListRow, 'online'>[] = [
+  {
+    id: 'station-uuid-1',
+    name: 'Сүхбаатарын талбай',
+    address: 'Сүхбаатарын талбай, UB',
+    status: 'active',
+    totalSlots: 10,
+    mqttDeviceId: 'cabinet-001',
+    lastHeartbeatAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lat: 47.9184,
+    lng: 106.9175,
+    availableSlots: 4,
+    occupiedSlots: 3,
+  },
+];
 
 describe('StationsService', () => {
   let service: StationsService;
@@ -58,6 +90,8 @@ describe('StationsService', () => {
           useValue: {
             findNearby: jest.fn(),
             findById: jest.fn(),
+            findByMqttDeviceId: jest.fn(),
+            findAdminList: jest.fn(),
             create: jest.fn(),
             update: jest.fn(),
             softDelete: jest.fn(),
@@ -178,6 +212,7 @@ describe('StationsService', () => {
 
       expect(result.id).toBe('station-uuid-1');
       expect(result.slots).toHaveLength(1);
+      expect(result.online).toBe(true);
     });
 
     it('throws NotFoundException when station not found', async () => {
@@ -186,6 +221,45 @@ describe('StationsService', () => {
       await expect(service.findById('non-existent')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('findByMqttDeviceId', () => {
+    it('returns station detail for mqtt device id', async () => {
+      repo.findByMqttDeviceId.mockResolvedValue(mockDetail);
+
+      const result = await service.findByMqttDeviceId('cabinet-001');
+
+      expect(result.id).toBe('station-uuid-1');
+      expect(repo.findByMqttDeviceId).toHaveBeenCalledWith('cabinet-001');
+    });
+  });
+
+  describe('findAdminList', () => {
+    it('marks stations online based on recent heartbeat', async () => {
+      repo.findAdminList.mockResolvedValue([
+        mockAdminList[0]!,
+        {
+          ...mockAdminList[0]!,
+          id: 'station-uuid-2',
+          mqttDeviceId: 'cabinet-002',
+          lastHeartbeatAt: new Date(Date.now() - 180_000),
+        },
+        {
+          ...mockAdminList[0]!,
+          id: 'station-uuid-3',
+          mqttDeviceId: null,
+          lastHeartbeatAt: null,
+        },
+      ]);
+
+      const result = await service.findAdminList();
+
+      expect(result).toEqual([
+        expect.objectContaining({ id: 'station-uuid-1', online: true }),
+        expect.objectContaining({ id: 'station-uuid-2', online: false }),
+        expect.objectContaining({ id: 'station-uuid-3', online: false }),
+      ]);
     });
   });
 

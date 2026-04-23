@@ -122,6 +122,43 @@ export class StationDetailResponseDto extends StationResponseDto {
   @ApiProperty({ example: 4 })
   availableSlots!: number;
 
+  @ApiProperty({ example: 3 })
+  occupiedSlots!: number;
+
+  @ApiProperty({ example: true })
+  online!: boolean;
+
+  @ApiProperty({ example: true })
+  supportsReturn!: boolean;
+
+  @ApiProperty({
+    example: {
+      totalPowerBanks: 4,
+      availableCount: 2,
+      chargingCount: 1,
+      rentedCount: 0,
+      faultyCount: 1,
+    },
+  })
+  inventorySummary!: {
+    totalPowerBanks: number;
+    availableCount: number;
+    chargingCount: number;
+    rentedCount: number;
+    faultyCount: number;
+  };
+
   @ApiProperty({ type: StationSlotResponseDto, isArray: true })
   slots!: StationSlotResponseDto[];
+}
+
+export class AdminStationListResponseDto extends StationResponseDto {
+  @ApiProperty({ example: 4 })
+  availableSlots!: number;
+
+  @ApiProperty({ example: 3 })
+  occupiedSlots!: number;
+
+  @ApiProperty({ example: true })
+  online!: boolean;
 }

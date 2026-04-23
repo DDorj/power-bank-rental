@@ -15,6 +15,9 @@ import { WalletModule } from './modules/wallet/wallet.module.js';
 import { RentalsModule } from './modules/rentals/rentals.module.js';
 import { PaymentsModule } from './modules/payments/payments.module.js';
 import { IotModule } from './modules/iot/iot.module.js';
+import { AdminModule } from './modules/admin/admin.module.js';
+import { AppHomeModule } from './modules/app-home/app-home.module.js';
+import { AppScanModule } from './modules/app-scan/app-scan.module.js';
 
 @Module({
   imports: [
@@ -54,6 +57,9 @@ import { IotModule } from './modules/iot/iot.module.js';
     RentalsModule,
     PaymentsModule,
     IotModule,
+    AdminModule,
+    AppHomeModule,
+    AppScanModule,
   ],
 })
 export class AppModule {}

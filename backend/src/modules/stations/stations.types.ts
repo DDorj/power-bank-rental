@@ -47,7 +47,23 @@ export interface PowerBankRecord {
 
 export interface StationDetail extends StationWithLocation {
   availableSlots: number;
+  occupiedSlots: number;
+  online: boolean;
+  supportsReturn: boolean;
+  inventorySummary: {
+    totalPowerBanks: number;
+    availableCount: number;
+    chargingCount: number;
+    rentedCount: number;
+    faultyCount: number;
+  };
   slots: Array<SlotRecord & { powerBank: PowerBankRecord | null }>;
+}
+
+export interface AdminStationListRow extends StationWithLocation {
+  availableSlots: number;
+  occupiedSlots: number;
+  online: boolean;
 }
 
 export interface CreateStationParams {
