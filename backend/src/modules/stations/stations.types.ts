@@ -24,6 +24,7 @@ export interface StationWithLocation extends StationRecord {
 export interface StationNearbyRow extends StationWithLocation {
   distanceMeters: number;
   availableSlots: number;
+  online: boolean | null;
 }
 
 export interface SlotRecord {
@@ -48,7 +49,7 @@ export interface PowerBankRecord {
 export interface StationDetail extends StationWithLocation {
   availableSlots: number;
   occupiedSlots: number;
-  online: boolean;
+  online: boolean | null;
   supportsReturn: boolean;
   inventorySummary: {
     totalPowerBanks: number;
@@ -63,7 +64,7 @@ export interface StationDetail extends StationWithLocation {
 export interface AdminStationListRow extends StationWithLocation {
   availableSlots: number;
   occupiedSlots: number;
-  online: boolean;
+  online: boolean | null;
 }
 
 export interface CreateStationParams {

@@ -76,14 +76,17 @@ export class AppScanService {
         frozenAmount: wallet.frozenAmount,
         availableBalance: wallet.availableBalance,
       },
-      canStartRental: stationOnline && slotRentable,
-      reason: !stationOnline
-        ? 'station_offline'
-        : slotRentable
-          ? 'ready'
-          : detectedSlot
-            ? 'slot_unavailable'
-            : 'station_unavailable',
+      canStartRental: stationOnline === true && slotRentable,
+      reason:
+        stationOnline === false
+          ? 'station_offline'
+          : stationOnline === null
+            ? 'station_unavailable'
+            : slotRentable
+              ? 'ready'
+              : detectedSlot
+                ? 'slot_unavailable'
+                : 'station_unavailable',
     };
   }
 

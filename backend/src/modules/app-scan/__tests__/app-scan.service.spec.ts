@@ -154,6 +154,48 @@ describe('AppScanService', () => {
     );
   });
 
+  it('does not mark scan ready when station online state is unknown', async () => {
+    stationsService.findById.mockResolvedValue({
+      id: 'station-1',
+      name: 'Shangri-La Mall',
+      address: 'Olympic street 19A',
+      status: 'active',
+      totalSlots: 8,
+      mqttDeviceId: 'cabinet-demo-1',
+      lastHeartbeatAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lat: 47.9136,
+      lng: 106.9155,
+      availableSlots: 1,
+      occupiedSlots: 1,
+      online: null,
+      supportsReturn: true,
+      inventorySummary: {
+        totalPowerBanks: 1,
+        availableCount: 1,
+        chargingCount: 0,
+        rentedCount: 0,
+        faultyCount: 0,
+      },
+      slots: [],
+    });
+    walletService.getOrCreate.mockResolvedValue({
+      id: 'wallet-1',
+      userId: 'user-1',
+      balance: 15000,
+      frozenAmount: 0,
+      availableBalance: 15000,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const result = await service.resolveQr('user-1', 'station-1');
+
+    expect(result.canStartRental).toBe(false);
+    expect(result.reason).toBe('station_unavailable');
+  });
+
   it('delegates rental preview to rentals service', async () => {
     rentalsService.previewStart.mockResolvedValue({
       stationId: 'station-1',

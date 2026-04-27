@@ -61,7 +61,9 @@ type RawDetailRow = {
 export class StationsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findNearby(params: NearbyParams): Promise<StationNearbyRow[]> {
+  async findNearby(
+    params: NearbyParams,
+  ): Promise<Omit<StationNearbyRow, 'online'>[]> {
     const radiusMeters = params.radiusKm * 1000;
 
     const rows = await this.prisma.$queryRaw<RawNearbyRow[]>`
@@ -115,7 +117,7 @@ export class StationsRepository {
     }));
   }
 
-  async findById(id: string): Promise<StationDetail | null> {
+  async findById(id: string): Promise<Omit<StationDetail, 'online'> | null> {
     return this.findDetailWhere(
       this.prisma.$queryRaw`
       SELECT
@@ -137,7 +139,7 @@ export class StationsRepository {
 
   async findByMqttDeviceId(
     mqttDeviceId: string,
-  ): Promise<StationDetail | null> {
+  ): Promise<Omit<StationDetail, 'online'> | null> {
     return this.findDetailWhere(this.prisma.$queryRaw`
       SELECT
         s.id, s.name, s.address, s.status, s.total_slots,
@@ -157,7 +159,7 @@ export class StationsRepository {
   private async findDetailWhere(
     query: Promise<RawDetailRow[]>,
     id?: string,
-  ): Promise<StationDetail | null> {
+  ): Promise<Omit<StationDetail, 'online'> | null> {
     const rows = await query;
 
     if (rows.length === 0) return null;
@@ -183,7 +185,6 @@ export class StationsRepository {
       lng: Number(row.lng),
       availableSlots: Number(row.available_slots),
       occupiedSlots: slots.filter((slot) => slot.powerBankId !== null).length,
-      online: false,
       supportsReturn: slots.some((slot) => slot.status === 'empty'),
       inventorySummary: {
         totalPowerBanks: slots.filter((slot) => slot.powerBank !== null).length,

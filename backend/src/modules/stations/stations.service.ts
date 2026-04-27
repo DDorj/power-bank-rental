@@ -21,11 +21,10 @@ export class StationsService {
 
   async findNearby(params: NearbyParams): Promise<StationNearbyRow[]> {
     const stations = await this.repo.findNearby(params);
-    if (!this.isMqttFilteringEnabled()) {
-      return stations;
-    }
-
-    return stations.filter((station) => this.isOnline(station));
+    return stations.map((station) => ({
+      ...station,
+      online: this.isOnline(station),
+    }));
   }
 
   async findById(id: string): Promise<StationDetail> {
@@ -33,8 +32,7 @@ export class StationsService {
     if (!station) {
       throw new NotFoundException(buildAppError('STATION_NOT_FOUND'));
     }
-    station.online = this.isOnline(station);
-    return station;
+    return { ...station, online: this.isOnline(station) };
   }
 
   async findByMqttDeviceId(mqttDeviceId: string): Promise<StationDetail> {
@@ -42,8 +40,7 @@ export class StationsService {
     if (!station) {
       throw new NotFoundException(buildAppError('STATION_NOT_FOUND'));
     }
-    station.online = this.isOnline(station);
-    return station;
+    return { ...station, online: this.isOnline(station) };
   }
 
   async findAdminList(): Promise<AdminStationListRow[]> {
@@ -78,9 +75,9 @@ export class StationsService {
   private isOnline(station: {
     mqttDeviceId: string | null;
     lastHeartbeatAt: Date | null;
-  }): boolean {
+  }): boolean | null {
     if (!this.isMqttFilteringEnabled()) {
-      return false;
+      return null;
     }
 
     const heartbeatTimeoutMs =

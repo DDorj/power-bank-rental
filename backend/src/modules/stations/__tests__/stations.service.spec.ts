@@ -15,6 +15,8 @@ import type {
   AdminStationListRow,
 } from '../stations.types.js';
 
+const FIXED_NOW = Date.now();
+
 const mockNearby: StationNearbyRow[] = [
   {
     id: 'station-uuid-1',
@@ -23,13 +25,14 @@ const mockNearby: StationNearbyRow[] = [
     status: 'active',
     totalSlots: 10,
     mqttDeviceId: 'cabinet-001',
-    lastHeartbeatAt: new Date(),
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    lastHeartbeatAt: new Date(FIXED_NOW - 30_000),
+    createdAt: new Date(FIXED_NOW),
+    updatedAt: new Date(FIXED_NOW),
     lat: 47.9184,
     lng: 106.9175,
     distanceMeters: 120,
     availableSlots: 4,
+    online: false,
   },
 ];
 
@@ -52,7 +55,7 @@ const mockDetail: StationDetail = {
       slotIndex: 0,
       status: 'empty',
       powerBankId: null,
-      updatedAt: new Date(),
+      updatedAt: new Date(FIXED_NOW),
       powerBank: null,
     },
   ],
@@ -66,9 +69,9 @@ const mockAdminList: Omit<AdminStationListRow, 'online'>[] = [
     status: 'active',
     totalSlots: 10,
     mqttDeviceId: 'cabinet-001',
-    lastHeartbeatAt: new Date(),
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    lastHeartbeatAt: new Date(FIXED_NOW - 30_000),
+    createdAt: new Date(FIXED_NOW),
+    updatedAt: new Date(FIXED_NOW),
     lat: 47.9184,
     lng: 106.9175,
     availableSlots: 4,
@@ -82,6 +85,9 @@ describe('StationsService', () => {
   let config: jest.Mocked<ConfigService>;
 
   beforeEach(async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(FIXED_NOW);
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StationsService,
@@ -116,8 +122,12 @@ describe('StationsService', () => {
     config = module.get(ConfigService);
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   describe('findNearby', () => {
-    it('returns nearby stations', async () => {
+    it('returns nearby stations annotated with online status', async () => {
       repo.findNearby.mockResolvedValue(mockNearby);
 
       const result = await service.findNearby({
@@ -129,6 +139,7 @@ describe('StationsService', () => {
 
       expect(result).toHaveLength(1);
       expect(result[0]!.distanceMeters).toBe(120);
+      expect(result[0]!.online).toBe(true);
       expect(repo.findNearby).toHaveBeenCalledWith({
         lat: 47.9184,
         lng: 106.9175,
@@ -150,14 +161,14 @@ describe('StationsService', () => {
       expect(result).toHaveLength(0);
     });
 
-    it('filters out offline and unconfigured cabinets when MQTT is enabled', async () => {
+    it('annotates nearby stations with online status when MQTT is enabled', async () => {
       repo.findNearby.mockResolvedValue([
         mockNearby[0]!,
         {
           ...mockNearby[0]!,
           id: 'station-uuid-2',
           mqttDeviceId: 'cabinet-002',
-          lastHeartbeatAt: new Date(Date.now() - 180_000),
+          lastHeartbeatAt: new Date(FIXED_NOW - 180_000),
         },
         {
           ...mockNearby[0]!,
@@ -174,7 +185,11 @@ describe('StationsService', () => {
         limit: 20,
       });
 
-      expect(result.map((station) => station.id)).toEqual(['station-uuid-1']);
+      expect(result).toEqual([
+        expect.objectContaining({ id: 'station-uuid-1', online: true }),
+        expect.objectContaining({ id: 'station-uuid-2', online: false }),
+        expect.objectContaining({ id: 'station-uuid-3', online: false }),
+      ]);
     });
 
     it('keeps all stations when MQTT filtering is disabled', async () => {
@@ -201,6 +216,7 @@ describe('StationsService', () => {
       });
 
       expect(result).toHaveLength(2);
+      expect(result.every((station) => station.online === null)).toBe(true);
     });
   });
 
@@ -243,7 +259,7 @@ describe('StationsService', () => {
           ...mockAdminList[0]!,
           id: 'station-uuid-2',
           mqttDeviceId: 'cabinet-002',
-          lastHeartbeatAt: new Date(Date.now() - 180_000),
+          lastHeartbeatAt: new Date(FIXED_NOW - 180_000),
         },
         {
           ...mockAdminList[0]!,

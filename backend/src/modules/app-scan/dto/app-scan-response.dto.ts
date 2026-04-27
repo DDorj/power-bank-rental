@@ -48,8 +48,14 @@ class AppScanStationDto {
   @ApiProperty({ example: 3 })
   occupiedSlots!: number;
 
-  @ApiProperty({ example: true })
-  online!: boolean;
+  @ApiProperty({
+    type: Boolean,
+    example: true,
+    nullable: true,
+    description:
+      'MQTT heartbeat-ийн дагуу кабинет онлайн эсэх. MQTT идэвхгүй бол null.',
+  })
+  online!: boolean | null;
 
   @ApiProperty({ example: true })
   supportsReturn!: boolean;
