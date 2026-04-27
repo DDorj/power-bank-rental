@@ -1,0 +1,13 @@
+{
+  "name": "power-bank-rental",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "cd backend && npm ci --include=dev && npm run build && npm prune --omit=dev",
+    "start": "./start.sh"
+  }
+}
