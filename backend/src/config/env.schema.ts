@@ -1,5 +1,17 @@
 import { z } from 'zod';
 
+const emptyStringToUndefined = (value: unknown): unknown =>
+  value === '' ? undefined : value;
+
+const optionalString = (schema: z.ZodString) =>
+  z.preprocess(emptyStringToUndefined, schema.optional());
+
+const optionalPositiveInt = () =>
+  z.preprocess(
+    emptyStringToUndefined,
+    z.coerce.number().int().positive().optional(),
+  );
+
 export const envSchema = z.object({
   NODE_ENV: z
     .enum(['development', 'test', 'production'])
@@ -9,9 +21,9 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().url(),
 
-  MQTT_URL: z.string().min(1).optional(),
-  MQTT_ACK_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
-  MQTT_HEARTBEAT_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  MQTT_URL: optionalString(z.string().min(1)),
+  MQTT_ACK_TIMEOUT_MS: optionalPositiveInt(),
+  MQTT_HEARTBEAT_TIMEOUT_MS: optionalPositiveInt(),
 
   CORS_ORIGINS: z
     .string()
@@ -24,38 +36,38 @@ export const envSchema = z.object({
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
 
   // Google OAuth
-  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
-  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
-  GOOGLE_CALLBACK_URL: z.string().url().optional(),
+  GOOGLE_CLIENT_ID: optionalString(z.string().min(1)),
+  GOOGLE_CLIENT_SECRET: optionalString(z.string().min(1)),
+  GOOGLE_CALLBACK_URL: optionalString(z.string().url()),
 
   // DAN OIDC
-  DAN_CLIENT_ID: z.string().min(1).optional(),
-  DAN_CLIENT_SECRET: z.string().min(1).optional(),
-  DAN_CALLBACK_URL: z.string().url().optional(),
-  DAN_ISSUER_URL: z.string().url().optional(),
+  DAN_CLIENT_ID: optionalString(z.string().min(1)),
+  DAN_CLIENT_SECRET: optionalString(z.string().min(1)),
+  DAN_CALLBACK_URL: optionalString(z.string().url()),
+  DAN_ISSUER_URL: optionalString(z.string().url()),
 
   // PII encryption (32-byte key as 64-char hex)
-  PII_ENCRYPTION_KEY: z.string().length(64).optional(),
-  NATIONAL_ID_HASH_SALT: z.string().min(16).optional(),
+  PII_ENCRYPTION_KEY: optionalString(z.string().length(64)),
+  NATIONAL_ID_HASH_SALT: optionalString(z.string().min(16)),
 
   // SMS (Mobicom / Unitel)
-  SMS_API_URL: z.string().url().optional(),
-  SMS_API_KEY: z.string().min(1).optional(),
-  OTP_FIXED_CODE: z.string().regex(/^\d{6}$/).optional(),
+  SMS_API_URL: optionalString(z.string().url()),
+  SMS_API_KEY: optionalString(z.string().min(1)),
+  OTP_FIXED_CODE: optionalString(z.string().regex(/^\d{6}$/)),
 
   // Bonum Gateway QR pay
-  BONUM_BASE_URL: z.string().url().optional(),
-  BONUM_APP_SECRET: z.string().min(1).optional(),
-  BONUM_TERMINAL_ID: z.string().min(1).optional(),
-  BONUM_MERCHANT_CHECKSUM_KEY: z.string().min(1).optional(),
-  MERCHANT_CHECKSUM_KEY: z.string().min(1).optional(),
-  BONUM_CALLBACK_URL: z.string().url().optional(),
-  BONUM_INVOICE_EXPIRES_IN: z.coerce.number().int().positive().optional(),
-  BONUM_QR_EXPIRES_IN: z.coerce.number().int().positive().optional(),
+  BONUM_BASE_URL: optionalString(z.string().url()),
+  BONUM_APP_SECRET: optionalString(z.string().min(1)),
+  BONUM_TERMINAL_ID: optionalString(z.string().min(1)),
+  BONUM_MERCHANT_CHECKSUM_KEY: optionalString(z.string().min(1)),
+  MERCHANT_CHECKSUM_KEY: optionalString(z.string().min(1)),
+  BONUM_CALLBACK_URL: optionalString(z.string().url()),
+  BONUM_INVOICE_EXPIRES_IN: optionalPositiveInt(),
+  BONUM_QR_EXPIRES_IN: optionalPositiveInt(),
   // Deprecated Bonum config keys kept temporarily for compatibility
-  BONUM_API_URL: z.string().url().optional(),
-  BONUM_MERCHANT_ID: z.string().min(1).optional(),
-  BONUM_MERCHANT_KEY: z.string().min(1).optional(),
+  BONUM_API_URL: optionalString(z.string().url()),
+  BONUM_MERCHANT_ID: optionalString(z.string().min(1)),
+  BONUM_MERCHANT_KEY: optionalString(z.string().min(1)),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

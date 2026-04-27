@@ -20,6 +20,19 @@ describe('validateEnv', () => {
     expect(result.PORT).toBe(4000);
   });
 
+  it('treats blank optional values as unset', () => {
+    const result = validateEnv({
+      ...base,
+      MQTT_URL: '',
+      MQTT_ACK_TIMEOUT_MS: '',
+      GOOGLE_CALLBACK_URL: '',
+    });
+
+    expect(result.MQTT_URL).toBeUndefined();
+    expect(result.MQTT_ACK_TIMEOUT_MS).toBeUndefined();
+    expect(result.GOOGLE_CALLBACK_URL).toBeUndefined();
+  });
+
   it('throws when DATABASE_URL is missing', () => {
     const rest: Record<string, unknown> = { REDIS_URL: base.REDIS_URL };
     expect(() => validateEnv(rest)).toThrow('Environment validation failed');
@@ -29,6 +42,12 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...base, REDIS_URL: 'not-a-url' })).toThrow(
       'Environment validation failed',
     );
+  });
+
+  it('throws when an optional URL is non-empty but invalid', () => {
+    expect(() =>
+      validateEnv({ ...base, GOOGLE_CALLBACK_URL: 'not-a-url' }),
+    ).toThrow('Environment validation failed');
   });
 
   it('throws when NODE_ENV is an invalid value', () => {
